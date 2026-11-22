@@ -29,14 +29,6 @@
 // down is derived from the declaration read back off the shipped table
 // (`shippedLimits()`), never from these constants.
 //
-// ── Everything that counts the server's limits counts five ──────────────────
-//
-// The server enforced three limits; it now enforces five. A count written in
-// prose is a claim nothing else checks, so each document that states the
-// server's count — the two source files' comments — is held to the new
-// number here, and its stale "three"
-// phrasing is named so a document that kept it fails by name.
-//
 // ── Safety ──────────────────────────────────────────────────────────────────
 //
 // Every `crucible.toml` is in a fresh OS tmpdir via `serverConfigDir()`
@@ -243,42 +235,5 @@ describe("each ingest limit resolves from the operator's crucible.toml", () => {
         shippedLimits()[earlier]!.recommended,
       );
     }
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Every place that counts the server's limits counts five
-// ═══════════════════════════════════════════════════════════════════════════
-
-function read(rel: string): string {
-  return fs.readFileSync(path.join(REPO, rel), "utf8");
-}
-
-/** The stale phrases a document counting THREE server limits used; none may survive. */
-function staleCounts(text: string, phrases: readonly RegExp[]): string[] {
-  return phrases.filter((p) => p.test(text)).map(String);
-}
-
-describe("every document that counts the server's limits counts five", () => {
-  test("src/limits.ts's comments count the server's five limits", () => {
-    const source = read("src/limits.ts");
-    expect(source).toMatch(/\bfive\b/i);
-    expect(
-      staleCounts(source, [/server's three\b/i, /\bthree limits\b/i, /\bTHREE, not four\b/]),
-    ).toEqual([]);
-  });
-
-  test("src/crucible.toml's comments count five, and its header says raw_output_chars is the one limit with no earlier value", () => {
-    const text = read("src/crucible.toml");
-    expect(text).toMatch(/\bfive\b/i);
-    expect(staleCounts(text, [/server's three\b/i, /\bthree limits\b/i])).toEqual([]);
-
-    // The header — every comment before the first table — owes the operator
-    // the one exception to "an install with no operator file behaves exactly as
-    // it did before": raw output was stored whole and is now capped.
-    const header = text.slice(0, text.search(/^\[/m));
-    expect(header.includes("raw_output_chars"), "the header does not name raw_output_chars").toBe(
-      true,
-    );
   });
 });

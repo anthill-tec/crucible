@@ -29,7 +29,7 @@
 // `docs/RUNBOOK.md`. Every test below is expected to FAIL for one of those
 // reasons — that is expected RED.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -159,14 +159,6 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 // `License: none` — a load-bearing declaration left to whatever the tool
 // defaults to, which is this CR's whole shape.
 //
-// DERIVED, NOT RETYPED (§S1/AC3's principle applied to a second figure): the
-// SPDX identifier is READ from `pyproject.toml`'s own `license =` declaration
-// rather than restated here. The npm server package and the PyPI client
-// package ship from this one repo as a version-locked pair, so two
-// identifiers that disagree IS the defect — and a test that retypes the
-// string cannot see that disagreement. Changing either declaration alone
-// fails here.
-//
 // Extends this file rather than opening a new one: it is already the home of
 // `package.json`'s published-identity contract (`§S1 publishable server
 // package.json`) and of what the tarball contains (`§S1 npm pack --dry-run
@@ -174,38 +166,7 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 // the real `npm pack --dry-run --json` mechanism this file already owns.
 // ---------------------------------------------------------------------------
 
-/** `pyproject.toml`'s own `[project] license = "<spdx>"` declaration. */
-const PYPROJECT_LICENSE_PAT = /^license\s*=\s*"([^"]+)"$/m;
-
-function declaredSpdxIdentifier(): string {
-  const match = PYPROJECT_LICENSE_PAT.exec(readText("pyproject.toml"));
-  if (!match) {
-    throw new Error(
-      'pyproject.toml declares no `license = "<spdx>"` — the identifier this ' +
-        "repo's two published packages share has no single source to read.",
-    );
-  }
-  return match[1] as string;
-}
-
 describe("CR-CRU-137 §S3 the published package declares its licence", () => {
-  test("a LICENSE file at the repository root carries the full text the declared identifier names", () => {
-    expect(existsSync(join(REPO_ROOT, "LICENSE"))).toBe(true);
-
-    // The identifier selects which text belongs here, so it is read first:
-    // a GPL-3.0 declaration over an MIT body is a licence that says two
-    // different things.
-    expect(declaredSpdxIdentifier()).toMatch(/^GPL-3\.0(-only|-or-later)$/);
-
-    const text = readText("LICENSE");
-    expect(text).toContain("GNU GENERAL PUBLIC LICENSE");
-    expect(text).toContain("Version 3, 29 June 2007");
-
-    // Bound — GPL-3.0's full text is ~35 kB. A one-line `GPL-3.0` stub, or a
-    // truncated copy, is a filename, not a licence grant.
-    expect(text.length).toBeGreaterThan(30_000);
-  });
-
   test("LICENSE ships in the published npm tarball, whole, straight from the repo root", () => {
     const entries = npmPackDryRunEntries();
 

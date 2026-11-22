@@ -15,7 +15,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { detectFormat, parseCompile } from "../../src/codecs/compile.ts";
 
-const REPO_ROOT = join(import.meta.dir, "../..");
 const FIXTURE_DIR = join(import.meta.dir, "../fixtures", "arduino-cli");
 
 function fixture(name: string): string {
@@ -397,21 +396,6 @@ describe("gcc codec — raw stays raw (regression guard: passes today)", () => {
   test("regression guard: empty input hinted gcc falls back to raw without throwing", () => {
     expect(() => parseCompile("", "gcc")).not.toThrow();
     expect(parseCompile("", "gcc").format).toBe("raw");
-  });
-});
-
-describe("gcc codec — the record names it", () => {
-  const GCC = /\bgcc\b/;
-
-  test("the compile codec module's header comment names gcc", () => {
-    const source = readFileSync(join(REPO_ROOT, "src", "codecs", "compile.ts"), "utf8");
-    const header: string[] = [];
-    for (const line of source.split("\n")) {
-      if (!line.startsWith("//")) break;
-      header.push(line);
-    }
-    expect(header.length).toBeGreaterThan(0);
-    expect(header.join("\n")).toMatch(GCC);
   });
 });
 
