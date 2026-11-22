@@ -102,7 +102,7 @@ def _args_from_template(argv):
     (repeatable), `args.cycle_kind` (repeatable, paired by position),
     `args.title`, `args.wave`) — never through argparse, so this file has no
     dependency on the shared registrar's own wiring, which is a different
-    concern (`test_cr054_fleet_inventory.py`'s census owns that)."""
+    concern."""
     values = {"cr": None, "title": None, "cycle": [], "cycle_kind": [],
               "cycles": None, "release": None, "wave": None, "agent": None}
     i = 1  # argv[0] is the verb name ("plan-file")

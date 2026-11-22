@@ -1107,10 +1107,9 @@ def cmd_test(args):
 
     CR-CRU-111 §S2/AC3/AC13 — this verb's name is not a tier, so it earns none:
     it ran the native host build over whatever `--dir` pointed at, which says
-    nothing about the dependency those tests take. It stated `unit`
-    POSITIONALLY here (the spelling cycle 378's keyword-only census could not
-    see), and its printed help claimed no tier at all — help and wire now agree,
-    in both directions. A caller who knows the tier says so with the `unit` verb
+    nothing about the dependency those tests take. It once stated `unit`
+    here while its printed help claimed no tier at all — help and wire now
+    agree, in both directions. A caller who knows the tier says so with the `unit` verb
     beside it; absent that the run carries none and the server's own documented
     default applies."""
     return _run_native_tests(args, "test", None, False)

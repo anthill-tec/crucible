@@ -332,7 +332,7 @@ def _registrar_call_lines(path, name):
     rather than a boolean, so AC4's "the registrar-parity check counts the call
     sites" is a real count: a client with none and a client with two are two
     different findings. Mirrors `_single_verb_registrar_delegator` in the
-    sibling `test_cr054_fleet_inventory.py`, which reads the same call shape
+    fleet inventory helpers, which read the same call shape
     for `add_next_verb` / `add_cr_depends_verb` / `add_queue_file_verb`."""
     lines = []
     for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):

@@ -12,7 +12,7 @@ imports them back, so the table still lives in one place. The six tier verbs
 from tests.client import CLIENT_SOURCE_DIR
 
 # The SOURCE paths: the tier-surface module and its importers
-# (test_cr128_flag_help_census) read and label them repo-relative. A spawn or a
+# read and label them repo-relative. A spawn or a
 # load goes through `client_script`, the test install.
 AXI_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 

@@ -1380,9 +1380,7 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
 # Asserted HERE, in this client's own suite, rather than as one fleet-wide set
 # comparison: a five-for-five that fails must NAME the client that lost the
 # verb, not report "expected 5, got 4". The shared registrar's own contract
-# lives in `test_crucible_axi_shared.py`; the frozen inventory set and the
-# derived registrar-parity sweep are §S2's, in
-# `test_cr054_fleet_inventory.py`.
+# lives in `test_crucible_axi_shared.py`.
 #
 # The fixture's CR ids live in module constants and are never spelled inside
 # an assertion (CR-CRU-097 §S1's residue rule), in a namespace this section
@@ -1531,7 +1529,7 @@ class ArduinoCrucibleQueueFileVerbTest(_BaseArduinoAxiTest):
 class ArduinoCrucibleQueueFileRegistrationTest(unittest.TestCase):
     """AC1 — HOW this client wires the verb, read from its AST so a name in a
     docstring or a help string can never be mistaken for a registration. The
-    readers are `test_cr054_fleet_inventory.py`'s, reused."""
+    readers are the fleet inventory helpers', reused."""
 
     def test_the_client_defines_one_cmd_queue_file_delegating_to_the_shared_implementation(self):
         """AC1's delegator and AC6's DRY half in one: a body longer than the

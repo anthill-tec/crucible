@@ -1223,8 +1223,7 @@ class SharedAxiNoReportWarningCauseOverrideTest(unittest.TestCase):
 # the implementation behind it stays this module's alone. The per-client half
 # — which client wires the registrar, which hand-rolls, and what each one
 # emits — is asserted in each client's own suite, so a failure names the
-# client. The frozen inventory set and the derived registrar-parity sweep are
-# §S2's, in `test_cr054_fleet_inventory.py`.
+# client.
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -1288,7 +1287,7 @@ class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
     full-replace POST every client reaches are THIS module's, and no client
     holds a copy.
 
-    Precedent: `test_cr054_fleet_inventory.py`'s
+    Precedent: a since-deleted inventory test's
     `test_the_shared_module_holds_the_implementation_the_clients_delegate_to`.
     Both tests below PASS ON ARRIVAL — they are the guard that keeps GREEN's
     four new delegators from becoming four new parsers.

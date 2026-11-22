@@ -38,8 +38,7 @@ implements a decision rather than re-deriving one):
     (both in `clients/_crucible_axi.py`, 11 call sites / 22 helper calls
     across five clients).
     Neither helper's required-parameter shape may change, and this client may
-    not grow a local copy — `tests/client/unit/test_cr054_drift_guard.py` guards
-    that, and nothing here relaxes it.
+    not grow a local copy, and nothing here relaxes that.
 
 HOW THE INVOCATION IS MEASURED, and why not by monkeypatching
 `subprocess.run`: both runners are tiny fake EXECUTABLES that append their own

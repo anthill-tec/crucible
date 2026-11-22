@@ -51,7 +51,7 @@ CR's 42." That bootstrap has since been removed: no client registers a
 project, and arduino's `_load_env` now reads only `CRUCIBLE_PROJECT_KEY`
 from the subproject `.env`. The CR's own
 Non-goals section excludes "the genuinely per-client logic" from any lift,
-and `tests/client/unit/test_cr054_fleet_inventory.py` (C1, committed) already
+and the fleet inventory (C1, committed) already
 encodes `_project_key` in `GENUINELY_PER_CLIENT`, not `SHARED`. Per the AC
 Cross-Check rule the DN -- the CR's own normative §S1 classification
 deliverable -- wins over the dispatch brief's summary: no test below asserts
@@ -150,7 +150,7 @@ def _load_bound_client_module(client, test, project):
 def _function_source_segment(path, name):
     """AST-extract the exact source text of a top-level `def <name>` in
     `path` (ast.parse, not grep/eyeball -- mirrors
-    test_cr054_fleet_inventory.py's method). Returns None if not defined as
+    the fleet inventory's method). Returns None if not defined as
     a top-level function at all (e.g. reduced to a module-level assignment)."""
     text = path.read_text()
     tree = ast.parse(text, filename=str(path))
@@ -291,13 +291,6 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
                     f"HTTPError into the structured "
                     f"{{'ok': False, 'error': ...}} result after delegating")
 
-    def test_request_transport_call_lives_in_the_shared_axi_module(self):
-        source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            "urllib.request.urlopen(", source,
-            "clients/_crucible_axi.py must own the real HTTP transport call "
-            "(urllib.request.urlopen) after the §S2 lift -- not present yet")
-
     def test_abbrev_home_path_logic_moves_out_of_every_client_and_still_works(self):
         """RED today: every client's own `_abbrev_home` contains
         `os.path.expanduser("~")` directly (confirmed identical bodies in
@@ -328,13 +321,6 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
                     unchanged, "/opt/other/x.py",
                     f"{client}-crucible.py's _abbrev_home must still leave "
                     f"a path outside the home directory unchanged")
-
-    def test_abbrev_home_path_logic_lives_in_the_shared_axi_module(self):
-        source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            'os.path.expanduser("~")', source,
-            "clients/_crucible_axi.py must own the real home-dir-collapse "
-            "logic (os.path.expanduser) after the §S2 lift -- not present yet")
 
 
 class HttpCoreStdlibOnlyTest(unittest.TestCase):

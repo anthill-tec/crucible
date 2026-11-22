@@ -85,8 +85,8 @@ label alone -- exactly C3's method):
   (the §S2b corrections #4/#5 below; see `IdentitySourceOnTheWireDriftCorrectionTest`
   at the foot of this file). C4 left the identity `source` split
   (`openclaw` -> `claude-md`) unpinned, per the dispatch brief; C5 corrected it
-  fleet-wide but pinned it only with source-text/AST scans in
-  `test_cr054_fleet_inventory.py` (`test_open_gate_identity_source_override_now_removed_fleet_wide`,
+  fleet-wide but pinned it only with source-text/AST scans
+  (`test_open_gate_identity_source_override_now_removed_fleet_wide`,
   `IdentitySourceEnumGuardTest`), which describe the SOURCE rather than the
   behaviour. The whole point of the correction is what reaches the SERVER, so
   C6 adds the missing half: every identity-payload-building site is invoked
@@ -199,7 +199,7 @@ def _load_client_module(client):
 
 def _function_source_segment(path, name):
     """AST-extract the exact source text of a top-level `def <name>` in
-    `path` -- mirrors test_cr054_fleet_inventory.py's / the sibling C2/C3
+    `path` -- mirrors the sibling C2/C3
     lift tests' method. Returns None if not defined as a top-level function."""
     text = path.read_text()
     tree = ast.parse(text, filename=str(path))
@@ -1362,7 +1362,7 @@ class RemoveAgentSilentCloseGateIdentityCombinedCorrectionTest(unittest.TestCase
 # DRIFTED §S2b corrections #4 + #5 -- the identity `source` ON THE WIRE.
 #
 # C5 corrected `openclaw` -> `claude-md` fleet-wide, but the only proofs were
-# source-text/AST scans (test_cr054_fleet_inventory.py). A scan cannot show
+# source-text/AST scans. A scan cannot show
 # what the SERVER receives -- which is the entire point of the correction. The
 # class below invokes each payload-building path for real with that client's
 # own `_post` mocked and asserts the ACTUAL outgoing body, so reverting the
@@ -1372,7 +1372,7 @@ class RemoveAgentSilentCloseGateIdentityCombinedCorrectionTest(unittest.TestCase
 
 
 # The documented enum a client's identity.source must belong to (the same set
-# test_cr054_fleet_inventory.py's IdentitySourceEnumGuardTest guards statically).
+# a since-deleted static guard checked).
 IDENTITY_SOURCE_ENUM = {"claude-md", "package-json", "git-repo", "manual"}
 FLEET_IDENTITY_SOURCE = "claude-md"
 # The pre-correction value (DN §4 findings #4/#5): outside the enum, and only
@@ -1621,7 +1621,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
             "set exercised behaviourally by this class -- add a behavioural "
             "test for the new/moved site (and update "
             "COVERED_IDENTITY_PAYLOAD_SITES) rather than relying on the "
-            "source-text scans in test_cr054_fleet_inventory.py")
+            "source-text scans")
 
 
 # ---------------------------------------------------------------------------

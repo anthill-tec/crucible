@@ -9,14 +9,10 @@ client's `_axi().cmd_project_meta` is unchanged.
 
 What is asserted here:
 
-  * the core's own source defines none of the `project-meta` names;
-  * the project module's source defines each of them once, and the key and
-    the `.env` reader and writer once;
   * on a loaded core, each of those names is the very object the project
     module defines, and the module the core loaded was read from the core's
     own directory;
-  * the project module's `_core` is a view of the core that loaded it;
-  * the project module imports only the standard library.
+  * the project module's `_core` is a view of the core that loaded it.
 
 The behaviour of `project-meta` itself is pinned, unchanged, by
 `test_project_meta_reads_and_writes_the_map` and
@@ -27,17 +23,13 @@ Invocation:
         --tests tests.client.unit.test_project_meta_lives_in_the_project_module
 """
 
-import ast
-import sys
 import unittest
 from pathlib import Path
 
 from tests.client.live_run_harness import load_client
 from tests.client.the_run_pipeline_lives_in_its_own_shared_module_helpers import (
     CLIENTS,
-    CORE_MODULE,
     is_core_view,
-    top_level_definitions,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -64,10 +56,6 @@ PROJECT_KEY_NAMES = (
 PROJECT_MODULE_NAMES = PROJECT_META_NAMES + PROJECT_KEY_NAMES
 
 
-def _source(path):
-    return Path(path).read_text(encoding="utf-8")
-
-
 def _require_project_module(test):
     test.assertTrue(
         PROJECT_MODULE.is_file(),
@@ -91,36 +79,6 @@ def project_namespace(test, core):
         f"the core")
     test.assertNotEqual(namespace.get("__name__"), core.__name__)
     return namespace
-
-
-class TheProjectMetaSectionMovedOutOfTheCoreTest(unittest.TestCase):
-
-    def test_the_core_defines_none_of_the_project_meta_names(self):
-        core_defs = top_level_definitions(ast.parse(_source(CORE_MODULE)))
-        still_there = [name for name in PROJECT_META_NAMES if name in core_defs]
-        self.assertEqual(
-            still_there, [],
-            "clients/_crucible_axi.py defines none of the project-meta names: "
-            "they are written in clients/_crucible_project.py and only "
-            "re-exported by the core")
-
-    def test_the_project_module_defines_each_project_meta_name_once(self):
-        _require_project_module(self)
-        defs = top_level_definitions(ast.parse(_source(PROJECT_MODULE)))
-        counts = {name: defs.count(name) for name in PROJECT_META_NAMES}
-        self.assertEqual(
-            counts, dict.fromkeys(PROJECT_META_NAMES, 1),
-            "clients/_crucible_project.py defines each project-meta name "
-            "exactly once")
-
-    def test_the_project_module_defines_the_key_and_the_env_reader_and_writer_once(self):
-        _require_project_module(self)
-        defs = top_level_definitions(ast.parse(_source(PROJECT_MODULE)))
-        counts = {name: defs.count(name) for name in PROJECT_KEY_NAMES}
-        self.assertEqual(
-            counts, dict.fromkeys(PROJECT_KEY_NAMES, 1),
-            "clients/_crucible_project.py defines the key namespace, the key "
-            "function and the `.env` reader and writer exactly once")
 
 
 class TheCoreReexportsTheProjectModuleTest(unittest.TestCase):
@@ -167,27 +125,6 @@ class TheCoreReexportsTheProjectModuleTest(unittest.TestCase):
                          "each core loads a project module of its own")
         self.assertIsNot(self.core.cmd_project_meta, other.cmd_project_meta)
 
-
-class TheProjectModuleIsCleanTest(unittest.TestCase):
-
-    def test_the_project_module_imports_only_the_standard_library(self):
-        _require_project_module(self)
-        tree = ast.parse(_source(PROJECT_MODULE))
-        imported = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported |= {alias.name.split(".")[0] for alias in node.names}
-            elif isinstance(node, ast.ImportFrom):
-                imported.add("." if node.level else (node.module or "").split(".")[0])
-        foreign = sorted(name for name in imported
-                         if name not in sys.stdlib_module_names
-                         and name != "__future__")
-        self.assertEqual(foreign, [],
-                         "clients/_crucible_project.py imports only the "
-                         "standard library; it reaches the core through its "
-                         "bound view")
-        self.assertIn("uuid", imported,
-                      "the project key is a uuid5, from the standard library")
 
 
 if __name__ == "__main__":

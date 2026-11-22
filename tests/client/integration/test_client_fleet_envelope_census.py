@@ -54,8 +54,7 @@ sometimes absent." So this module does NOT grep. It:
      `verb` and `ok` -- the fleet's own established envelope shape, not a
      bare "some text decoded" check.
 
-RED-vs-analysis note (precedent: `test_cr054_fleet_inventory.py`'s own
-module docstring, same repo, same kind of cycle): this is an S0
+RED-vs-analysis note: this is an S0
 MEASURING-INSTRUMENT cycle -- no production code changes. Every test below
 is expected to PASS TODAY: the primary deliverable is a TRUTHFUL CENSUS
 ("report, do not assert a target yet" -- the CR's own §S0 wording), plus a
@@ -681,8 +680,7 @@ class UnmeasurableVerbClassificationTest(unittest.TestCase):
 # `SyntheticSourceEnvelopeDetectorProofTest` builds a client-shaped module
 # the detector has never seen. `RealClientCopyEnvelopeDetectorProofTest`
 # mirrors CR-CRU-054 §S3's own on-scratch-disk proof
-# (`DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest`, in the sibling
-# `test_cr054_drift_guard.py`): copy a REAL client into a tmpdir and append a
+# (a drift-guard proof since deleted): copy a REAL client into a tmpdir and append a
 # genuinely bare verb, never touching `clients/` itself. Both drive the EXACT
 # SAME `enumerate_verbs`/`build_argv`/`drive_verb`/`classify_envelope`
 # machinery `_get_census()` uses above -- proving the machinery detects a
@@ -1184,8 +1182,8 @@ class SevenNoReportSitesStarvedCensusTest(unittest.TestCase):
 # ── CR-CRU-091 §S10 / AC19 -- the 25 (verb x client) roadmap pairs ─────────
 #
 # AC19 is explicit that conformance is asserted by EXTENDING the two existing
-# harnesses, never by a parallel checker: verb PRESENCE in the sibling
-# `test_cr054_fleet_inventory.py`, and ENVELOPE CONFORMANCE here, through
+# harnesses, never by a parallel checker: ENVELOPE CONFORMANCE is asserted
+# here, through
 # THIS file's own `enumerate_verbs`/`build_argv`/`drive_verb`/
 # `classify_envelope` machinery -- the same four functions `_get_census()`
 # drives, so a roadmap verb cannot be conformant by a different standard than
@@ -1488,8 +1486,8 @@ class Cr091RoadmapVerbAxiConformanceTest(unittest.TestCase):
 # ── CR-CRU-092 §S6 / AC15 -- `next`, asserted PER PRINCIPLE, in all five ───
 #
 # AC15 is explicit that conformance EXTENDS the two existing harnesses rather
-# than adding a parallel checker: verb PRESENCE in the sibling
-# `test_cr054_fleet_inventory.py`, and ENVELOPE CONFORMANCE here, through THIS
+# than adding a parallel checker: ENVELOPE CONFORMANCE is asserted here,
+# through THIS
 # file's own `enumerate_verbs`/`build_argv`/`drive_verb`/`classify_envelope`
 # machinery -- exactly the shape CR-CRU-091 §S10 used above.
 #
@@ -2998,7 +2996,7 @@ class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
 # ── CR-CRU-075 §S2/AC5 — `queue-file`, enveloped on all five clients ───────
 #
 # Presence and conformance are separate assertions, and this is the second
-# one: the sibling `test_cr054_fleet_inventory.py` says the verb is REGISTERED
+# one: this section says what each of the five clients REGISTERED
 # in all five clients, and this section says what each of the five actually
 # writes on stdout — on the success path and on BOTH failure paths, because a
 # wired subparser that emits prose, or an error with no next step in it, is a

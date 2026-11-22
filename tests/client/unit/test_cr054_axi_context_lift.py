@@ -122,7 +122,7 @@ def _load_client_module(client):
 def _function_source_segment(path, name):
     """AST-extract the exact source text of a top-level `def <name>` in
     `path` (ast.parse, not grep/eyeball -- mirrors
-    test_cr054_fleet_inventory.py's / test_cr054_http_core_lift.py's method).
+    test_cr054_http_core_lift.py's method).
     Returns None if not defined as a top-level function at all."""
     text = path.read_text()
     tree = ast.parse(text, filename=str(path))

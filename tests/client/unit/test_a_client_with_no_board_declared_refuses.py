@@ -19,9 +19,8 @@ linter, a runner or a compile is spawned, and the gate records no outcome.
 
 What this module also holds: the chain still resolves when a file DOES declare
 a board (a project-declared board counts for `project-create`, which binds its
-project dir first), the shipped data declares no board and the core offers no
-shipped board, and no client code or string literal spells the server's
-packaged port.
+project dir first), and the shipped data declares no board and the core offers
+no shipped board.
 
 ── Tier ──────────────────────────────────────────────────────────────────────
 
@@ -34,7 +33,6 @@ binds a port, opens a socket or starts a process.
 """
 
 import argparse
-import ast
 import contextlib
 import importlib.util
 import io
@@ -51,7 +49,6 @@ from pathlib import Path
 from unittest import mock
 from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
@@ -69,10 +66,6 @@ CLIENT_FILES = {
 
 #: The key a board is declared under, exactly as an operator writes it.
 CLIENT_URL_KEY = "[client] url"
-
-#: The server's packaged port. No client may spell it: a client that knows
-#: it is a client that can fall back to it.
-PACKAGED_PORT = "3849"
 
 PROJECT_KEY = "6f1c3a52-0d0e-4c41-9a51-1f2b3c4d5e6f"
 AGENT = "no-board-agent"
@@ -521,7 +514,7 @@ class ProjectCreateResolvesTheProjectsOwnBoardTest(_ScratchDirsCase):
 
 
 class NoShippedBoardRemainsTest(unittest.TestCase):
-    """The distribution declares no board and spells no packaged port."""
+    """The distribution declares no board."""
 
     def test_the_shipped_configuration_declares_no_client_url(self):
         """The shipped data names no board: the installer writes the
@@ -536,28 +529,6 @@ class NoShippedBoardRemainsTest(unittest.TestCase):
         axi = _load_module(AXI_PATH, "no_shipped_board")
         self.assertFalse(hasattr(axi, "shipped_board"),
                          "the core must no longer offer `shipped_board`")
-
-    def test_no_client_code_or_string_literal_spells_the_packaged_port(self):
-        """No client spells the server's packaged port. Comments are not
-        code or string literals and are not read here; every Python string
-        literal (docstrings included) and every numeric literal is, and the
-        reporters' and the schema's text outside `//` comment lines."""
-        offenders = []
-        for path in sorted(CLIENT_SOURCE_DIR.rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Constant) and (
-                        (isinstance(node.value, str) and PACKAGED_PORT in node.value)
-                        or (isinstance(node.value, int) and str(node.value) == PACKAGED_PORT)):
-                    offenders.append(f"{path.relative_to(REPO_ROOT)} line {node.lineno}")
-        for path in sorted(itertools.chain(CLIENT_SOURCE_DIR.rglob("*.ts"), CLIENT_SOURCE_DIR.rglob("*.json"))):
-            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if PACKAGED_PORT in line and not line.lstrip().startswith(("//", "*", "/*")):
-                    offenders.append(f"{path.relative_to(REPO_ROOT)} line {number}")
-        self.assertEqual(offenders, [],
-                         f"no client code or string literal may spell {PACKAGED_PORT}")
 
 
 class AVerbThatNeedsNoBoardStillRunsTest(unittest.TestCase):

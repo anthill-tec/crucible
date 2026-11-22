@@ -69,8 +69,7 @@ AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
 # The queue verb's implementation is SHARED (CR-CRU-054): one function, five
 # delegating clients. It is therefore driven through ONE client end-to-end —
-# the fleet's presence/parity census lives in test_cr054_fleet_inventory.py and
-# is not restated here.
+# the fleet's presence/parity is not restated here.
 CLIENT_PATH = CLIENTS_DIR / "python-crucible.py"
 
 PROJECT_KEY = "cr129-queue-key"
