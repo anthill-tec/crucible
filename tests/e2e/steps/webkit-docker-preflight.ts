@@ -25,9 +25,7 @@ export function webkitDockerMode(wsEndpoint: string | undefined): boolean {
 
 /** Whether this run HAS a WebKit engine at all: CI's native install, or the
  *  local Docker Playwright Server. The ONE predicate that gates the
- *  webkit-iphone project in playwright.config.ts AND tells
- *  tests/integration/e2e-suite-reaches-the-board.test.ts whether the phone scenarios run
- *  on a second engine, so the two cannot disagree. */
+ *  webkit-iphone project in playwright.config.ts. */
 export function webkitEngineAvailable(input: WebkitEngineInput): boolean {
   return input.isCI || webkitDockerMode(input.wsEndpoint);
 }

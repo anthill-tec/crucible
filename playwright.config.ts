@@ -68,8 +68,7 @@ import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight
 //
 // The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
 // collects its feature only when a WebKit engine exists for this run, CI's
-// native install or the Docker endpoint (`webkitEngineAvailable`, the one
-// predicate tests/integration/e2e-suite-reaches-the-board.test.ts shares). A plain
+// native install or the Docker endpoint (`webkitEngineAvailable`). A plain
 // local `bun run test:e2e` therefore runs Chromium only instead of failing
 // on an engine this host cannot launch.
 const webkitAvailable = webkitEngineAvailable({
