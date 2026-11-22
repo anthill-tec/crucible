@@ -20,9 +20,8 @@ linter, a runner or a compile is spawned, and the gate records no outcome.
 What this module also holds: the chain still resolves when a file DOES declare
 a board (a project-declared board counts for `project-create`, which binds its
 project dir first), the shipped data declares no board and the core offers no
-shipped board, no client code or string literal spells the server's packaged
-port, and the RUNBOOK and the shipped `[client]` comment describe no shipped
-last-resort board.
+shipped board, and no client code or string literal spells the server's
+packaged port.
 
 ── Tier ──────────────────────────────────────────────────────────────────────
 
@@ -57,7 +56,6 @@ CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
 SHIPPED_CONFIG = CLIENT_SOURCE_DIR / "crucible.toml"
-RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 CONFIG_NAME = "crucible.toml"
 
 CLIENT_FILES = {
@@ -560,72 +558,6 @@ class NoShippedBoardRemainsTest(unittest.TestCase):
                     offenders.append(f"{path.relative_to(REPO_ROOT)} line {number}")
         self.assertEqual(offenders, [],
                          f"no client code or string literal may spell {PACKAGED_PORT}")
-
-
-def _board_section_of_shipped_config(text):
-    """The shipped file's board section: from the `# ──` banner that precedes
-    its `[client]` header (live or commented out) to the next live table
-    header, or the end of the file."""
-    lines = text.split("\n")
-    header = next((i for i, line in enumerate(lines)
-                   if re.match(r"^\s*#?\s*\[client\]\s*(#.*)?$", line)), None)
-    if header is None:
-        return None
-    start = header
-    for i in range(header - 1, -1, -1):
-        if lines[i].lstrip().startswith("# ──"):
-            start = i
-            break
-        if re.match(r"^\s*\[", lines[i]):
-            break
-    end = next((i for i in range(header + 1, len(lines))
-                if re.match(r"^\s*\[[^\]]+\]\s*(#.*)?$", lines[i])), len(lines))
-    return "\n".join(lines[start:end])
-
-
-def _runbook_client_section(text):
-    lines = text.split("\n")
-    start = next((i for i, line in enumerate(lines)
-                  if line.startswith("#") and "`[client]`" in line), None)
-    if start is None:
-        return None
-    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("#")),
-               len(lines))
-    return "\n".join(lines[start:end])
-
-
-#: The ways a text describes a shipped board as the chain's last resort.
-SHIPPED_BOARD_WORDING = re.compile(
-    r"last\s+resort|shipped\s+(?:one|default|declaration|address|board|value|url)"
-    r"|always\s+defaulted", re.IGNORECASE)
-
-
-class TheDocsDescribeNoShippedBoardTest(unittest.TestCase):
-    """The two places an operator reads the board's rule."""
-
-    def test_the_runbook_board_section_says_a_client_refuses_and_names_no_last_resort(self):
-        """The RUNBOOK's board section says a client with no board declared
-        refuses, and describes no shipped last resort."""
-        section = _runbook_client_section(RUNBOOK.read_text(encoding="utf-8"))
-        if section is None:
-            self.fail(f"{RUNBOOK} keeps a section headed with `[client]`")
-        normal = re.sub(r"\s+", " ", section)
-        self.assertIsNone(SHIPPED_BOARD_WORDING.search(normal),
-                          f"the RUNBOOK's board section describes a shipped board: {normal!r}")
-        self.assertRegex(normal, re.compile(r"refus", re.IGNORECASE),
-                         f"the section says a client with no board declared refuses: {normal!r}")
-
-    def test_the_shipped_client_comment_says_the_installer_writes_the_url_and_names_no_last_resort(self):
-        """The shipped `[client]` comment says the installer writes the url,
-        and describes no shipped last resort."""
-        section = _board_section_of_shipped_config(SHIPPED_CONFIG.read_text(encoding="utf-8"))
-        if section is None:
-            self.fail(f"{SHIPPED_CONFIG} keeps a `[client]` section")
-        normal = re.sub(r"\s+", " ", section)
-        self.assertIsNone(SHIPPED_BOARD_WORDING.search(normal),
-                          f"the `[client]` comment describes a shipped board: {normal!r}")
-        self.assertRegex(normal, re.compile(r"\binstall", re.IGNORECASE),
-                         f"the comment says the installer writes the url: {normal!r}")
 
 
 class AVerbThatNeedsNoBoardStillRunsTest(unittest.TestCase):

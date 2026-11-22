@@ -175,8 +175,7 @@ def _scratch_fleet(root):
     run module travels with it.
 
     A module copied without its declarations can resolve nothing at all, which
-    is why the shipped `crucible.toml` travels with it -- the same fleet list
-    `test_no_suite_resolves_the_checkout_configuration.py` copies.
+    is why the shipped `crucible.toml` travels with it.
     """
     clients = Path(root) / "clients"
     clients.mkdir(parents=True)

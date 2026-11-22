@@ -24,8 +24,7 @@ chain, each a live recorder:
     <install>/clients/crucible.toml  -> board SHIPPED   (the package data)
 
 The fleet is copied into a scratch install root for that, which is the idiom
-`test_an_installed_deployment_resolves_its_configuration.py` and
-`test_no_suite_resolves_the_checkout_configuration.py` already use: an
+`test_an_installed_deployment_resolves_its_configuration.py` already uses: an
 installed client derives its install dir from its OWN module location
 (`<install>/clients/_crucible_axi.py`), so a fleet copied outside the checkout
 has a controllable install layer. Rewriting the SHIPPED layer's declaration in
@@ -35,9 +34,8 @@ and which no test may touch.
 
 ── Why the exports here are not a contradiction ─────────────────────
 
-`tests/client/unit/test_no_test_steers_a_client_by_a_retired_variable.py` forbids
-any suite from steering through the four retired variables, and allow-lists
-this file with a stated reason. Criterion 3 is `$CRUCIBLE_URL` and
+No suite steers a client through the four retired variables; this file
+exports them on purpose. Criterion 3 is `$CRUCIBLE_URL` and
 `$CRUCIBLE_BASE` are dead: exported to junk, nothing changes -- and the only
 way to assert what a process READ is to export it and watch the outcome not
 follow. A grep proves nothing about behaviour. Both directions are driven:
@@ -654,10 +652,6 @@ class TheOrchestratorsOwnBoardStaysOperatorStateTest(unittest.TestCase):
     `TheChainIsProjectThenInstallThenShippedTest`, which drive all five clients
     against a live board per layer. A copy here would pin one behaviour twice
     and grow the criterion count without growing the coverage.
-
-    The companion half — that no SUITE may resolve that file — is enforced by
-    `test_no_suite_resolves_the_checkout_configuration.py`, which this cycle
-    extends from the limits to the board.
     """
 
     def setUp(self):
