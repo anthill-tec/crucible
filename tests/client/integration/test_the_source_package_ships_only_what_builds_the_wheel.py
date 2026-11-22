@@ -71,6 +71,9 @@ DIST_INFO_FILES = ("METADATA", "WHEEL", "RECORD", "entry_points.txt", "licenses/
 
 MARKDOWN_CONTENT_TYPE = b"Description-Content-Type: text/markdown"
 
+#: The directories a build left in the checkout would make.
+CHECKOUT_BUILD_DIRECTORIES = ("dist", "build")
+
 #: How many members a failure message lists before it summarises the rest.
 SHOWN = 25
 
@@ -114,12 +117,17 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
     sdist_wheel_names: list[str] | None = None
     checkout_wheel_names: list[str] | None = None
     sdist_wheel_metadata: bytes | None = None
+    #: Which of `dist/` and `build/` the checkout had before the builds ran.
+    present_before: tuple[str, ...] = ()
 
     @classmethod
     def setUpClass(cls):
         gap = build_modules_gap()
         if gap is not None:
             raise RuntimeError(f"the source package's contents cannot be verified: {gap}")
+
+        cls.present_before = tuple(name for name in CHECKOUT_BUILD_DIRECTORIES
+                                   if (REPO_ROOT / name).exists())
 
         # Each directory's cleanup is registered as it is made, so a build
         # that times out or fails in this method leaks neither.
@@ -278,9 +286,17 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
     # -- the checkout --------------------------------------------------------
 
     def test_the_builds_leave_no_dist_or_build_directory_in_the_checkout(self):
-        strays = [name for name in ("dist", "build") if (REPO_ROOT / name).exists()]
-        self.assertEqual(strays, [],
-                         f"the builds write only into their own directories, found: {strays}")
+        created = [name for name in CHECKOUT_BUILD_DIRECTORIES
+                   if name not in self.present_before and (REPO_ROOT / name).exists()]
+        self.assertEqual(
+            created, [],
+            "the builds write only into their own directories; they created in the "
+            f"checkout: {created} (present before the builds, so not theirs: "
+            f"{list(self.present_before)})")
+        if self.present_before:
+            self.skipTest(
+                f"{list(self.present_before)} existed in the checkout before the builds, "
+                "so whether the builds wrote into it cannot be told")
 
 
 if __name__ == "__main__":
