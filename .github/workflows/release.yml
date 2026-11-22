@@ -130,7 +130,6 @@ jobs:
       # major's direct (unzipped) uploads — it also turns an artifact hash
       # mismatch into an error by default. A single-sided bump therefore fails
       # not here but later, in a publish job that on a tag ref uploads to PyPI.
-      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
@@ -636,7 +635,6 @@ jobs:
       # major's direct (unzipped) uploads and errors on an artifact hash
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
-      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
@@ -684,7 +682,6 @@ jobs:
       # major's direct (unzipped) uploads and errors on an artifact hash
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
-      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist

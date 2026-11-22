@@ -254,8 +254,8 @@ export default defineConfig({
     // `chromium` main body nor the other mobile project ever double-runs a
     // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
     // note: a project that swept up the F1 empty-db precondition a second
-    // time would both red tests/unit/e2e-suite-dependency-graph.test.ts's "the
-    // ordering precondition runs exactly once" invariant AND seed the
+    // time would both break the invariant that the ordering precondition
+    // runs exactly once AND seed the
     // "empty" database ahead of that second run. Both `dependencies` on
     // `chromium-empty-db` (never on `chromium`) for the same reason every
     // other project here does: a failing scenario in the main body must

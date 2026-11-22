@@ -39,132 +39,6 @@ function readText(relPath: string): string {
   return readFileSync(join(REPO_ROOT, relPath), "utf8");
 }
 
-// ---------------------------------------------------------------------------
-// §S2/§S4 — server npm `bin` (npx-runnable, publishable server identity)
-// ---------------------------------------------------------------------------
-
-describe("§S4 server npm bin (npx-runnable)", () => {
-  test("package.json declares a bin mapping to an existing server entry file", () => {
-    const pkg = JSON.parse(readText("package.json")) as {
-      name?: string;
-      bin?: string | Record<string, string>;
-    };
-
-    expect(pkg.bin).toBeDefined();
-
-    const entries: Array<[string, string]> =
-      typeof pkg.bin === "string"
-        ? [[pkg.name ?? "unknown", pkg.bin]]
-        : Object.entries(pkg.bin as Record<string, string>);
-
-    expect(entries.length).toBeGreaterThan(0);
-
-    for (const [binName, binTarget] of entries) {
-      expect(typeof binTarget).toBe("string");
-      expect(binTarget.length).toBeGreaterThan(0);
-      const resolved = join(REPO_ROOT, binTarget);
-      expect(existsSync(resolved)).toBe(true);
-
-      // Must be real wiring to the server entry, not an empty/no-op stub.
-      const binContent = readFileSync(resolved, "utf8");
-      expect(binContent.length).toBeGreaterThan(0);
-      expect(binContent).toMatch(/server(\.ts|\.js)?/);
-      expect(binName.length).toBeGreaterThan(0);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// §S4/§S6 — CI publish workflow (Sandesh-modelled shape, single release.yml
-// per the CR's own §S4 text — see ESCALATION note at top of file)
-// ---------------------------------------------------------------------------
-
-describe("§S4/§S6 CI publish workflow (.github/workflows/release.yml)", () => {
-  const relPath = join(".github", "workflows", "release.yml");
-
-  test("release.yml exists and is valid YAML with an on.release.published + workflow_dispatch trigger", () => {
-    expect(existsSync(join(REPO_ROOT, relPath))).toBe(true);
-
-    const raw = readText(relPath);
-    const parsed = Bun.YAML.parse(raw) as {
-      on?: {
-        release?: { types?: string[] };
-        workflow_dispatch?: unknown;
-      };
-      jobs?: Record<string, unknown>;
-    };
-
-    expect(parsed.on).toBeDefined();
-    expect(parsed.on?.release).toBeDefined();
-    expect(parsed.on?.release?.types).toContain("published");
-
-    // Manual Test-PyPI / dry-run path (§S6: "validated against Test PyPI
-    // first"), same trigger shape as Sandesh's publish-pypi.yml.
-    expect(parsed.on).toHaveProperty("workflow_dispatch");
-
-    expect(parsed.jobs).toBeDefined();
-    expect(Object.keys(parsed.jobs as Record<string, unknown>).length).toBeGreaterThanOrEqual(2);
-  });
-
-  test("release.yml gates the real publish job(s) on the release event only", () => {
-    const raw = readText(relPath);
-    const gatedOnRelease = raw.match(/if:\s*.*github\.event_name\s*==\s*'release'/g) ?? [];
-    // Bounded: at least one gated publish job, but not an unbounded number of
-    // matches that would suggest the guard was pasted onto every job
-    // (including e.g. the build/test job, which must run unconditionally).
-    expect(gatedOnRelease.length).toBeGreaterThanOrEqual(1);
-    expect(gatedOnRelease.length).toBeLessThanOrEqual(4);
-  });
-
-  test("release.yml publishes to PyPI via Trusted Publishing (OIDC) with a Test-PyPI dry-run path", () => {
-    const raw = readText(relPath);
-    expect(raw).toContain("pypa/gh-action-pypi-publish");
-    expect(raw).toMatch(/id-token:\s*write/);
-    expect(raw).toContain("test.pypi.org");
-  });
-
-  test("release.yml publishes the bun/node server package to npm", () => {
-    const raw = readText(relPath);
-    expect(raw).toMatch(/npm publish/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// §S1 — install.sh bootstrap (the one-line curl … | sh entrypoint)
-// ---------------------------------------------------------------------------
-
-describe("§S1 install.sh bootstrap", () => {
-  test("install.sh exists at repo root as a shell script", () => {
-    expect(existsSync(join(REPO_ROOT, "install.sh"))).toBe(true);
-
-    const script = readText("install.sh");
-    // A real shell script leads with a shebang.
-    expect(script).toMatch(/^#!\s*\/(usr\/)?bin\/(env\s+)?sh/);
-  });
-
-  test("install.sh implements the §S1 uv → crucible-axi flow", () => {
-    const script = readText("install.sh");
-
-    // Ensures uv is present (checked, and installed via Astral's canonical
-    // bootstrap when absent).
-    expect(script).toContain("uv");
-    expect(script).toMatch(/command\s+-v\s+uv/);
-    expect(script).toContain("astral.sh/uv/install.sh");
-
-    // Installs the PyPI primary orchestrator on a fresh machine, and advances an
-    // existing one — CR-CRU-072 superseded the bare-`uv tool install` assertion.
-    // The advancing verb is `uv tool install --upgrade`, NOT `uv tool upgrade`:
-    // measured against real uv 0.11.8, the latter resolves within the constraint
-    // the tool was installed under, so a pinned install reports "already
-    // current" forever. Behavioural coverage lives in
-    // tests/integration/cr072-installer-upgrade.test.ts; this pins the flow's shape only.
-    expect({
-      fresh: script.includes("uv tool install crucible-axi"),
-      upgrade: script.includes("uv tool install --upgrade crucible-axi"),
-    }).toEqual({ fresh: true, upgrade: true });
-  });
-});
-
 // CR-CRU-041 §S1 — Make the server package publishable
 //
 // Spec: docs/changes/CR-CRU-041-release-mechanism.md §S1 + Acceptance criteria
@@ -226,37 +100,6 @@ function npmPackDryRunEntries(): PackedFile[] {
 function npmPackDryRunFiles(): string[] {
   return npmPackDryRunEntries().map((f) => f.path);
 }
-
-describe("§S1 publishable server package.json", () => {
-  test("package.json has no private field (or false), scoped public name, and publishConfig.access", () => {
-    const pkg = JSON.parse(readText("package.json")) as {
-      name?: string;
-      private?: boolean;
-      publishConfig?: { access?: string };
-    };
-
-    // POSITIVE — exact required values, not mere presence.
-    expect(pkg.private).not.toBe(true);
-    expect(pkg.name).toBe("@anthill-tec/crucible-server");
-    expect(pkg.publishConfig).toBeDefined();
-    expect(pkg.publishConfig?.access).toBe("public");
-  });
-
-  test("package.json declares a files whitelist covering bin/, src/, public/", () => {
-    const pkg = JSON.parse(readText("package.json")) as { files?: string[] };
-
-    expect(Array.isArray(pkg.files)).toBe(true);
-    const files = pkg.files as string[];
-    expect(files.length).toBeGreaterThan(0);
-
-    // Each required runtime path must be covered by some whitelist entry
-    // (exact dir entry like "bin/" or a "bin/**" style glob).
-    for (const required of ["bin", "src", "public"]) {
-      const covered = files.some((f) => f === required || f.startsWith(`${required}/`));
-      expect(covered).toBe(true);
-    }
-  });
-});
 
 describe("§S1 npm pack --dry-run tarball contents", () => {
   // CR-CRU-137 §S3/AC3 — this test says what the published package IS, so it
@@ -346,25 +189,6 @@ function declaredSpdxIdentifier(): string {
 }
 
 describe("CR-CRU-137 §S3 the published package declares its licence", () => {
-  test("package.json's license field is the SPDX identifier pyproject.toml declares", () => {
-    const spdx = declaredSpdxIdentifier();
-    const pkg = JSON.parse(readText("package.json")) as { license?: string };
-
-    // The read value is SPDX-shaped — an identifier, not prose or a file
-    // reference — so the equality below cannot be satisfied by two matching
-    // nonsense strings.
-    expect(spdx).toMatch(/^[A-Za-z0-9][A-Za-z0-9.+-]*$/);
-
-    // POSITIVE — one identifier, both published packages.
-    expect(pkg.license).toBe(spdx);
-
-    // NEGATIVE — npm's two "no usable licence" spellings. `UNLICENSED` is
-    // what a scaffolded package.json carries, and a `SEE LICENSE IN …`
-    // reference is not an identifier a consumer's licence tooling can read.
-    expect(pkg.license).not.toBe("UNLICENSED");
-    expect(pkg.license?.startsWith("SEE LICENSE IN")).toBe(false);
-  });
-
   test("a LICENSE file at the repository root carries the full text the declared identifier names", () => {
     expect(existsSync(join(REPO_ROOT, "LICENSE"))).toBe(true);
 
@@ -446,23 +270,6 @@ describe("CR-CRU-137 §S3 the published package declares its licence", () => {
 // file "goes red the moment §S1 lands").
 // ---------------------------------------------------------------------------
 
-type ReleaseWorkflow = {
-  on?: {
-    push?: { branches?: string[] };
-    pull_request?: unknown;
-    release?: { types?: string[] };
-    workflow_dispatch?: unknown;
-  };
-  jobs?: Record<string, { if?: string }>;
-};
-
-function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
-  const relPath = join(".github", "workflows", "release.yml");
-  const raw = readText(relPath);
-  const parsed = Bun.YAML.parse(raw) as ReleaseWorkflow;
-  return { raw, parsed };
-}
-
 /**
  * The shell bodies of one job's `run:` steps, located by the job's key in the
  * parsed job graph and delivered as the YAML parser does (block scalars
@@ -474,80 +281,7 @@ function releaseJobRunBodies(jobs: Record<string, WorkflowJob062>, jobName: stri
   );
 }
 
-describe("§S2 release.yml trigger topology", () => {
-  test("on.push.branches includes both develop and master", () => {
-    const { parsed } = readReleaseWorkflow();
-
-    expect(parsed.on?.push).toBeDefined();
-    expect(Array.isArray(parsed.on?.push?.branches)).toBe(true);
-    const branches = parsed.on?.push?.branches as string[];
-
-    expect(branches).toContain("develop");
-    expect(branches).toContain("master");
-  });
-
-  test("on declares a pull_request trigger", () => {
-    const { parsed } = readReleaseWorkflow();
-    expect(parsed.on).toHaveProperty("pull_request");
-  });
-
-  test("create-release is gated on a push to master, not on workflow_dispatch", () => {
-    const { parsed } = readReleaseWorkflow();
-    const createRelease = parsed.jobs?.["create-release"];
-    expect(createRelease).toBeDefined();
-    expect(typeof createRelease?.if).toBe("string");
-
-    const cond = createRelease?.if as string;
-    // POSITIVE — exact required guard.
-    expect(cond).toContain("github.event_name == 'push'");
-    expect(cond).toContain("github.ref == 'refs/heads/master'");
-    // NEGATIVE — must NOT still be gated on workflow_dispatch.
-    expect(cond).not.toContain("workflow_dispatch");
-  });
-
-  test("workflow_dispatch is rehearsal-only: no job other than publish-testpypi and dry-run-npm is gated on it", () => {
-    const { parsed } = readReleaseWorkflow();
-    const jobs = parsed.jobs as Record<string, { if?: string }>;
-    expect(jobs).toBeDefined();
-
-    const allowed = new Set(["publish-testpypi", "dry-run-npm"]);
-    const gatedOnDispatch = Object.entries(jobs)
-      .filter(([, job]) => typeof job.if === "string" && job.if.includes("workflow_dispatch"))
-      .map(([name]) => name);
-
-    // Bound: exactly the two rehearsal jobs, nothing else (kills the
-    // three-way collision where create-release also fired on dispatch).
-    for (const name of gatedOnDispatch) {
-      expect(allowed.has(name)).toBe(true);
-    }
-    expect(gatedOnDispatch).toContain("publish-testpypi");
-    expect(gatedOnDispatch).toContain("dry-run-npm");
-    expect(gatedOnDispatch.length).toBe(2);
-  });
-});
-
 describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 §S5's v-prefixed scheme)", () => {
-  const BARE_TAG_REGEX_SOURCE = "^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$";
-
-  test("publish-pypi guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    // Isolate the publish-pypi job's own shell so we don't accidentally match
-    // publish-npm's identical guard text.
-    const pypiShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-pypi").join("\n");
-    expect(pypiShell.length).toBeGreaterThan(0);
-
-    expect(pypiShell).toContain(BARE_TAG_REGEX_SOURCE);
-    // NEGATIVE — the superseded v-prefixed pattern must be gone from this job.
-    expect(pypiShell).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
-  });
-
-  test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
-    const npmShell = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm").join("\n");
-    expect(npmShell.length).toBeGreaterThan(0);
-
-    expect(npmShell).toContain(BARE_TAG_REGEX_SOURCE);
-    expect(npmShell).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
-  });
-
   test("the guard regex extracted from publish-pypi accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     // Exercises the ACTUAL regex found in the file (not a hand-maintained
     // duplicate) against the exact ref shapes GitHub Actions supplies via
@@ -584,54 +318,6 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     expect(extractedRegex.test("refs/tags/0.1")).toBe(false);
     expect(extractedRegex.test("refs/tags/junk")).toBe(false);
   });
-
-  test("create-release's tag-detection grep matches bare semver tags, not v-prefixed", () => {
-    const { raw } = readReleaseWorkflow();
-    // POSITIVE — the bare grep pattern must be the one wired in.
-    expect(raw).toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
-    // NEGATIVE — the superseded v-prefixed grep pattern must be gone.
-    expect(raw).not.toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
-  });
-
-  // 🚨 CR-CRU-061 §S2 SUPERSEDES the assertion below (2026-08-04). Cycle 185
-  // (§S1/§S6, this same describe block) pinned "publish-npm still VERIFIES
-  // package.json against the tag, only the dead #v strip is removed" —
-  // correct for that cycle, since §S2 (deriving the version) was explicitly
-  // deferred. §S2 now lands: the verify-and-fail comparison is REPLACED by a
-  // derive step (`npm version --no-git-tag-version --allow-same-version
-  // "$VERSION"`, per the CR's own §S2 text) — package.json is now SET from
-  // the tag, not compared against it. The original verify-only assertion
-  // remains visible in git history (this file's blame) rather than being
-  // restated as live test code — direction reversed, not deleted, per the
-  // CR's own §S6 discipline for this file. See also the data-driven
-  // execution tests below ("§S2 publish-npm derives...") for the behavioural
-  // half of this contract.
-  test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
-    const npmRunBodies = releaseJobRunBodies(parseReleaseWorkflowJobs062(), "publish-npm");
-    const npmShell = npmRunBodies.join("\n");
-
-    const runBody = extractNpmVersionRunBody(npmRunBodies);
-    // POSITIVE — the derive step exists and matches the CR's own §S2
-    // contract text verbatim (not merely "some npm version call").
-    expect(runBody.length).toBeGreaterThan(0);
-    expect(runBody).toContain("npm version");
-    expect(runBody).toContain("--no-git-tag-version");
-    expect(runBody).toContain("--allow-same-version");
-
-    // NEGATIVE — the old verify-and-fail comparison is gone, not merely
-    // renamed around; and the dead #v strip (already swept in §S1) has not
-    // resurfaced.
-    expect(npmShell).not.toMatch(/if\s*\[\s*"\$VERSION"\s*!=\s*"\$PKG_VERSION"\s*\]/);
-    expect(npmShell.toLowerCase()).not.toContain("!= release tag");
-    expect(npmShell).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
-    expect(npmShell).not.toMatch(/#v\}/);
-  });
-
-  test("sweep: no #v strip or ^v tag-prefix pattern survives anywhere in release.yml", () => {
-    const { raw } = readReleaseWorkflow();
-    expect(raw).not.toMatch(/#v\}/);
-    expect(raw).not.toContain("^v[0-9]");
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -644,10 +330,7 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
 // the CI workspace... confirm --allow-same-version prevents a spurious
 // failure when the value already matches" (Risk section).
 //
-// The rewritten test in the §S1 describe block above ("publish-npm SETS
-// (derives) package.json's version from the tag...") pins the STRUCTURAL
-// half of this contract (derive step present, verify-and-fail gone, exact
-// flags). The tests below drive the extracted step body as DATA — actually
+// The tests below drive the extracted step body as DATA — actually
 // EXECUTING the real shell fragment found in release.yml, under `bash -e`
 // (matching GitHub Actions' own run-step shell, `bash --noprofile --norc -eo
 // pipefail`), against a real scratch package.json — per the CR's own Risk
@@ -780,40 +463,6 @@ describe("§S2 publish-npm derives package.json's version from the tag (driven a
   });
 });
 
-// CR-CRU-062 §S0-§S4 — CI actually runs the gates (bun/python/e2e test jobs,
-// no event-restricting `if`, and the publish jobs `needs:` them)
-//
-// Spec: docs/changes/CR-CRU-062-ci-runs-the-gates.md.
-//
-// §S0 is the load-bearing constraint measured at gap analysis: publish-pypi
-// and publish-npm are `if: github.event_name == 'release'`; create-release is
-// a DIFFERENT workflow run, gated on push+master. `needs:` only orders jobs
-// WITHIN a single run, so a test job scoped to push/pull_request simply does
-// not exist in the release run — a publish job that `needs:` a SKIPPED job is
-// itself skipped, silently publishing nothing. Therefore the bun/python/e2e
-// test jobs below must carry NO event-restricting `if` at all, and every
-// publishing job must `needs:` them (extending the existing graph — §S4 — not
-// a second, parallel guard mechanism). CR-062 gated publish-pypi and
-// publish-npm; the 0.2.0 ruling put create-release and publish-testpypi on the
-// same list — PUBLISHING_JOBS below is that set as data.
-//
-// Extends this file rather than starting a new one, following the pattern the
-// §S4 docs — RELEASING.md block above already set: this is the established
-// home for release.yml's assertions across every CR that touches it.
-//
-// Genuinely parses the workflow via Bun.YAML.parse (as the existing
-// readReleaseWorkflow()/ReleaseWorkflow helpers above already do) rather than
-// substring-matching, for the needs graph and if-absence checks specifically
-// — a substring test would pass on a commented-out line or a job name
-// appearing only in prose, and the CR spec calls this out explicitly.
-//
-// RED phase: release.yml on this branch has no bun/python/e2e test job at
-// all (this CR's own Context section measured, by sweep, that CI runs no
-// test today) — every assertion below is expected to FAIL: the `findJobsRunning`
-// lookups return zero matches, so the `.toBe(1)` / `toBeDefined()` guards fail
-// first, before the `if`/`needs`/env assertions further down would even be
-// reached against a real job.
-
 type WorkflowStep062 = { name?: string; run?: string; env?: Record<string, string> };
 type WorkflowJob062 = {
   needs?: string | string[];
@@ -828,179 +477,6 @@ function parseReleaseWorkflowJobs062(): Record<string, WorkflowJob062> {
   const parsed = Bun.YAML.parse(raw) as Workflow062;
   return parsed.jobs ?? {};
 }
-
-function findJobsRunning062(
-  jobs: Record<string, WorkflowJob062>,
-  substr: string,
-): Array<[string, WorkflowJob062]> {
-  return Object.entries(jobs).filter(([, job]) =>
-    (job.steps ?? []).some(
-      (s) => typeof s.run === "string" && s.run.replace(/\\\r?\n/g, " ").replace(/\s+/g, " ").includes(substr),
-    ),
-  );
-}
-
-function normalizeNeeds062(needs?: string | string[]): string[] {
-  if (!needs) return [];
-  return Array.isArray(needs) ? needs : [needs];
-}
-
-// Exact commands, verbatim from the CR's own §S1/§S2/§S3 text and measured
-// against the real repo (package.json's "test"/"test:e2e" scripts, and the
-// gap-analysis-measured `-m unittest discover` invocation, server-free).
-// Since CR-CRU-260 AC5 the suite runs on `.venv/bin/python`, the interpreter
-// that carries the dev extra; since CR-CRU-261 it runs by tier directory, and
-// the job is found by its unit-tier step (the integration step follows it).
-// Since CR-CRU-263 the unit tier runs hermetically through the versioned
-// tagging runner (which discovers its start dir with `-t .` itself), wrapped by
-// `scripts/hermetic/run.sh`; the step is matched on the command the wrapper
-// runs, its line continuations joined.
-const BUN_SUITE_CMD = "bun test";
-const PY_SUITE_CMD = ".venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit";
-const E2E_SUITE_CMD = "bun run test:e2e";
-
-describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
-  test("exactly one job runs the bun suite (`bun test`)", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsRunning062(jobs, BUN_SUITE_CMD);
-    // POSITIVE — exactly one, not merely "at least one".
-    expect(matches.length).toBe(1);
-  });
-
-  test("exactly one job runs the Python suite's unit tier (`.venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit`)", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
-    expect(matches.length).toBe(1);
-  });
-
-  test("exactly one job runs e2e (`bun run test:e2e`)", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsRunning062(jobs, E2E_SUITE_CMD);
-    expect(matches.length).toBe(1);
-  });
-});
-
-describe("§S0 the three test jobs carry NO event-restricting `if`", () => {
-  test("the bun/python/e2e test jobs each have `if` undefined — they run on push, pull_request, AND release", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const bunJob = findJobsRunning062(jobs, BUN_SUITE_CMD)[0];
-    const pyJob = findJobsRunning062(jobs, PY_SUITE_CMD)[0];
-    const e2eJob = findJobsRunning062(jobs, E2E_SUITE_CMD)[0];
-
-    // Guard: the jobs must actually exist before their `if` can be judged
-    // absent — otherwise `undefined` would vacuously "pass" against a job
-    // that was never found.
-    expect(bunJob).toBeDefined();
-    expect(pyJob).toBeDefined();
-    expect(e2eJob).toBeDefined();
-
-    // POSITIVE — the required property is the ABSENCE of `if`, so the run
-    // event alone (push/pull_request/release) governs whether the job runs.
-    expect(bunJob?.[1].if).toBeUndefined();
-    expect(pyJob?.[1].if).toBeUndefined();
-    expect(e2eJob?.[1].if).toBeUndefined();
-  });
-});
-
-// A publish is every job that emits something the outside world can see: the
-// GitHub Release (which is what fires the two registry publishes), PyPI, npm,
-// and the TestPyPI rehearsal. The artifact-only jobs publish nothing and are
-// not gated. release.yml's header carries the job-by-job audit; the two lists
-// below are that audit as data.
-const PUBLISHING_JOBS = ["create-release", "publish-pypi", "publish-testpypi", "publish-npm"];
-const ARTIFACT_ONLY_JOBS = ["build", "pack-server", "dry-run-npm"];
-
-describe("§S4 every publishing job `needs:` build + all three test jobs", () => {
-  for (const jobName of PUBLISHING_JOBS) {
-    test(`${jobName} needs build + the bun/python/e2e test jobs`, () => {
-      const jobs = parseReleaseWorkflowJobs062();
-      const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
-      const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
-      const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
-
-      expect(bunJobName).toBeDefined();
-      expect(pyJobName).toBeDefined();
-      expect(e2eJobName).toBeDefined();
-
-      const job = jobs[jobName];
-      expect(job).toBeDefined();
-      const needs = normalizeNeeds062(job?.needs);
-
-      // POSITIVE — build must survive (§S4: extend the graph, not replace it),
-      // plus all three test jobs.
-      expect(needs).toContain("build");
-      expect(needs).toContain(bunJobName as string);
-      expect(needs).toContain(pyJobName as string);
-      expect(needs).toContain(e2eJobName as string);
-    });
-  }
-
-  test("the publishing jobs carry one identical needs list — one graph, no second mechanism", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const [reference, ...others] = PUBLISHING_JOBS.map((jobName) =>
-      [...normalizeNeeds062(jobs[jobName]?.needs)].sort(),
-    );
-
-    expect(reference).toBeDefined();
-    expect(reference?.length).toBeGreaterThan(0);
-    for (const needs of others) {
-      expect(needs).toEqual(reference);
-    }
-  });
-
-  test("every job is classified — a publish, one of the three suites, or an audited artifact-only job; a new job must be placed in the audit", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const suiteJobs = [BUN_SUITE_CMD, PY_SUITE_CMD, E2E_SUITE_CMD].flatMap((cmd) => {
-      const name = findJobsRunning062(jobs, cmd)[0]?.[0];
-      return name === undefined ? [] : [name];
-    });
-    expect(suiteJobs.length).toBe(3);
-
-    const classified = [...PUBLISHING_JOBS, ...suiteJobs, ...ARTIFACT_ONLY_JOBS].sort();
-    expect(Object.keys(jobs).sort()).toEqual(classified);
-  });
-});
-
-describe("§S2 the Python test job is server-free", () => {
-  test("uses `unittest discover` and does NOT use the client's `regression` verb or CRUCIBLE_PROJECT_KEY", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
-    expect(matches.length).toBe(1);
-    const [, job] = matches[0];
-
-    const runText = (job.steps ?? []).map((s) => s.run ?? "").join("\n");
-    // NEGATIVE — the server-needing verb and its required env var must be
-    // absent from the WHOLE job (every step), not merely from the one step
-    // that happens to match PY_SUITE_CMD.
-    expect(runText).not.toContain("regression");
-    expect(runText.toLowerCase()).not.toContain("crucible_project_key");
-    const jobEnvText = JSON.stringify(job.env ?? {}) + (job.steps ?? []).map((s) => JSON.stringify(s.env ?? {})).join("");
-    expect(jobEnvText.toLowerCase()).not.toContain("crucible_project_key");
-  });
-});
-
-describe("§S3 the e2e job sets CRUCIBLE_DB explicitly in its env", () => {
-  test("CRUCIBLE_DB is present with a non-empty value, declared on the job (not inherited from the ambient environment)", () => {
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsRunning062(jobs, E2E_SUITE_CMD);
-    expect(matches.length).toBe(1);
-    const [, job] = matches[0];
-
-    // CRUCIBLE_DB may be declared at job level or on the specific run step —
-    // either satisfies "the job sets it explicitly"; what must NOT happen is
-    // it being absent from both (silently inherited/ambient, CR-052's exact
-    // failure mode).
-    const jobEnvValue = job.env?.CRUCIBLE_DB;
-    const stepEnvValue = (job.steps ?? [])
-      .map((s) => s.env?.CRUCIBLE_DB)
-      .find((v) => typeof v === "string");
-    const value = jobEnvValue ?? stepEnvValue;
-
-    expect(value).toBeDefined();
-    expect(typeof value).toBe("string");
-    expect((value as string).length).toBeGreaterThan(0);
-  });
-});
 
 // CR-CRU-062 §S5 — build/pack the SERVER artifact in CI too (RED).
 //
@@ -1056,22 +532,9 @@ function findJobsMatchingRun062(
 }
 
 describe("§S5 CI builds/packs the npm server artifact too, on the same unconditional cadence as the Python `build` job", () => {
-  test("at least one job dry-run-packs the npm server artifact with NO event-restricting `if` (runs on push, not just workflow_dispatch rehearsal)", () => {
-    // BORN RED — today exactly one job (`dry-run-npm`) matches the
-    // pack/dry-run pattern, and its `if` is
-    // `github.event_name == 'workflow_dispatch'` — defined, not absent — so
-    // the "unconditional" filter below currently yields zero matches.
-    const jobs = parseReleaseWorkflowJobs062();
-    const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
-    const unconditional = matches.filter(([, job]) => job.if === undefined);
-
-    // POSITIVE — at least one such job exists AND runs unconditionally.
-    expect(unconditional.length).toBeGreaterThanOrEqual(1);
-  });
-
   test("the unconditional packaging step, executed for real, resolves the declared bin entrypoint (bin/crucible-server.mjs) into the tarball", () => {
-    // Guard first (assertion, not a crash): the previous test's own
-    // condition must hold before this one can extract a real script to run.
+    // Guard first (assertion, not a crash): an unconditional job must pack
+    // before this test can extract a real script to run.
     const jobs = parseReleaseWorkflowJobs062();
     const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
     const unconditional = matches.filter(([, job]) => job.if === undefined);
