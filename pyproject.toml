@@ -35,8 +35,10 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #                            (CR-CRU-040 §S1); coverage.py is the only
 #                            supported coverage path for this client.
 #   build                  — the PEP 517 frontend the packaging contracts
-#                            build a real wheel with, as
-#                            `sys.executable -m build --wheel --no-isolation`:
+#                            build real artifacts with, as
+#                            `sys.executable -m build --wheel --no-isolation`
+#                            for a wheel, or with no selector for the sdist
+#                            and the wheel built from it:
 #                            the suite's OWN interpreter, offline, no other
 #                            interpreter tried. Fail-fast, never skipped:
 #                            `setUpClass` RAISES, naming this extra, when
