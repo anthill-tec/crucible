@@ -2660,6 +2660,13 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     # vocabulary itself, so the enumeration is the lookup above asked for each
     # tier: the same parse, without the single-name filter.
     suites=_axi().template_declared_suites,
+    # Only `bdd` is a declared cell here (the other five verbs are wired), and
+    # its declared profile runs maven's `verify` phase.
+    runs="Runs the project's declared `<target>` profile, `mvn clean verify "
+         "-P<target>`, and files every surefire and failsafe report the run "
+         "wrote under `<target>`. With no `<target>` profile in pom.xml it "
+         "refuses (tier-run-undeclared).",
+    runnable=_runnable_tiers,
 )
 
 
@@ -2817,11 +2824,8 @@ def main():
         add_args=(_add_project_args,))
     # `bdd` is maven's one declared-only cell with no verb of its own: its
     # help says what its declaration runs.
-    sub.choices["bdd"].description = (
-        "Runs the project's declared `bdd` profile, `mvn clean verify -Pbdd`, "
-        "and files every surefire and failsafe report the run wrote under "
-        "`bdd`. With no `bdd` profile in pom.xml it refuses "
-        "(tier-run-undeclared).")
+    sub.choices["bdd"].description = _axi().declared_tier_runs_line(
+        _TIER_DECLARATION_SURFACE, "bdd")
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
     co.add_argument("--agent", help="If set, ingest the build output as a compile result")

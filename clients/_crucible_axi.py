@@ -6635,13 +6635,18 @@ def ingested_tier():
     return ENVELOPE_TIER_COMPILE if _ingested_compile else ENVELOPE_TIER_NONE
 
 
-def tier_verb_help(tier, meaning, wired):
+def tier_verb_help(tier, meaning, wired, declares=None):
     """§S1 — the one line a tier verb prints in its client's help: what the
     tier MEANS (from the mirror, so all five clients teach one vocabulary) and
     what THIS client does with it — the run it performs, or the refusal it
-    answers with while the project has declared no target for it."""
+    answers with while the project has declared no target for it. A declared
+    cell whose surface (`declares`) says what its declaration runs says that
+    instead of the generic refusal."""
     if wired is not None:
         return f"{tier.upper()} tier — {meaning}. {wired.runs}"
+    runs = declared_tier_runs_line(declares, tier) if declares is not None else None
+    if runs:
+        return f"{tier.upper()} tier — {meaning}. {runs}"
     return (f"{tier.upper()} tier — {meaning}. No target for it is declared on "
             f"this stack: the verb refuses (ok:false, exit 1) naming what to "
             f"declare, and never falls back to another target.")
@@ -6688,10 +6693,17 @@ def tier_verb_help(tier, meaning, wired):
 #               `None` says this surface cannot enumerate a project's
 #               declaration at all (python, whose declaration IS the
 #               invocation — CR-CRU-111 ruling 1).
+#   `runs`      optional: what a declared cell runs, with `<target>` filled
+#               from the template, said by that cell's help line in place of
+#               the generic refusal. Unset, the help line is the refusal.
+#   `runnable`  optional: `(args) -> tiers`, the tier verbs this client runs
+#               on this project, named by a declared cell's refusal. Unset,
+#               the refusal names the tiers the client wires.
 DeclaredTierSurface = collections.namedtuple(
     "DeclaredTierSurface",
-    ("target", "names", "read", "run", "add_args", "suites"),
-    defaults=((), None))
+    ("target", "names", "read", "run", "add_args", "suites", "runs",
+     "runnable"),
+    defaults=((), None, None, None))
 
 
 def declared_target_name(surface, tier):
@@ -6705,6 +6717,14 @@ def declared_tier_surface_line(surface, tier):
     `declared_target_name` would find."""
     return surface.names.replace("<target>",
                                  declared_target_name(surface, tier))
+
+
+def declared_tier_runs_line(surface, tier):
+    """What a declared cell runs, as its surface's `runs` says it, with
+    `<target>` filled; None when the surface does not say."""
+    if not surface.runs:
+        return None
+    return surface.runs.replace("<target>", declared_target_name(surface, tier))
 
 
 def declared_tier_run(tier, funcs, surface):
@@ -6728,7 +6748,9 @@ def declared_tier_run(tier, funcs, surface):
         target = declared_target_name(surface, tier)
         found = surface.read(args, target)
         if not found:
-            raise TierRunUndeclared(tier, declared,
+            runnable = (surface.runnable(args) if surface.runnable is not None
+                        else declared)
+            raise TierRunUndeclared(tier, runnable,
                                     declared_tier_surface_line(surface, tier))
         return surface.run(args, tier, found)
 
@@ -6773,7 +6795,7 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
     for tier, meaning in TIER_MEANINGS.items():
         wired = funcs.get(tier)
         tp = sub.add_parser(tier, parents=list(parents),
-                            help=tier_verb_help(tier, meaning, wired))
+                            help=tier_verb_help(tier, meaning, wired, declares))
         for adder in add_args:
             adder(tp)
         # §S6 ruling 4 — a DECLARED cell takes its client's declared-cell flag
