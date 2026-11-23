@@ -477,22 +477,15 @@ def _xml_total_for(maven_dir, module, kinds, reports_dir):
     return _xml_total
 
 
-def _run_logged(cmd, cwd, env, log_path, narrator=None):
+def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False):
     """Run `cmd` on the shared run path (`run_streamed`): the combined output
     streams live to stderr and `log_path` while maven works, the optional
     `narrator` observes every line, and the returned capture stays
     byte-identical to a capture-after-exit (lets an agent read a long mvn run
-    back from a file instead of re-running it)."""
-    return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
-
-
-class _ConsoleCapture:
-    """The observer of a run nothing narrates: it reads no line, and its
-    presence alone has the run's console teed to stderr and captured."""
-
-    def observe(self, line):
-        """Nothing is read from `line`; the run's own capture keeps it."""
-        del line
+    back from a file instead of re-running it). `capture` tees and captures
+    the console even with neither a log nor a narrator."""
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator,
+                               capture=capture)
 
 
 # --------------------------------------------------------------------------- #
@@ -1037,8 +1030,7 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
             # The console is captured on both paths: an empty selection is
             # read from it, and stdout carries the envelope alone.
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer if observer is not None
-                                 else _ConsoleCapture())
+                                 observer, capture=True)
     except _axi().RunAbandoned as abandoned:
         # What maven wrote before the signal reaches the board before the run
         # is aborted.

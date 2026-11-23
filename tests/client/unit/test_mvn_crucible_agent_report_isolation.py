@@ -99,7 +99,7 @@ def _make_fake_mvn_run(surefire_content=None, failsafe_content=None):
     when the property is absent. As real surefire does, `-Dtest=!*` runs (and
     writes) no surefire report. Returns a `subprocess.CompletedProcess` the
     way `_run_logged` itself would."""
-    def _fake(cmd, cwd, env, log_path, narrator=None):
+    def _fake(cmd, cwd, env, log_path, narrator=None, **_kwargs):
         if surefire_content is not None and "-Dtest=!*" not in cmd:
             surefire_dir = (_flag_value(cmd, "-Dsurefire.reportsDirectory=")
                             or os.path.join(cwd, "target", "surefire-reports"))
@@ -350,7 +350,7 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
     reads it from there, and says so in a warning naming `reportsDirectory`."""
 
     def test_reports_a_pinned_pom_wrote_to_target_are_moved_into_the_agents_directory_and_warned(self):
-        def pinned_pom_run(cmd, cwd, env, log_path, narrator=None):
+        def pinned_pom_run(cmd, cwd, env, log_path, narrator=None, **_kwargs):
             # The POM's own <reportsDirectory> wins: the -D flags are ignored.
             # As real surefire does, `-Dtest=!*` runs (and writes) no surefire
             # report.
@@ -518,7 +518,7 @@ class ModuleTierMultiModuleReactorSendsEveryReportInlineTest(_BaseMvnIsolationTe
     the `data` of its one `POST /api/v2/runs` under `tier: module`."""
 
     def test_module_tier_reactor_run_with_agent_sends_both_modules_reports_under_tier_module(self):
-        def two_module_reactor_run(cmd, cwd, env, log_path, narrator=None):
+        def two_module_reactor_run(cmd, cwd, env, log_path, narrator=None, **_kwargs):
             reports_dir = _flag_value(cmd, "-Dsurefire.reportsDirectory=")
             self.assertIsNotNone(reports_dir, f"cmd={cmd!r}")
             assert reports_dir is not None
