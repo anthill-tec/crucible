@@ -1297,6 +1297,11 @@ def cmd_pre_merge_gate(args):
     stopped = _axi().gate_lint_stage(args, pd, _ops(), stack=_STACK,
                                      agent_id=_axi().optional_agent_id(args),
                                      verb="pre-merge-gate")
+    if stopped is None:
+        # The declared unit-check stage follows lint, in lint's directory.
+        stopped = _axi().gate_unit_check_stage(
+            args, pd, _ops(), agent_id=_axi().optional_agent_id(args),
+            verb="pre-merge-gate")
     if stopped is not None:
         return stopped
     reg_args = argparse.Namespace(
@@ -1915,6 +1920,7 @@ def main():
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
     _axi().add_skip_lint_arg(pmg)
+    _axi().add_skip_unit_check_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

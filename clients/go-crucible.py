@@ -722,6 +722,10 @@ def cmd_pre_merge_gate(args):
     stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
                                      agent_id=agent, verb=verb,
                                      default=_go_vet_default(modules))
+    if stopped is None:
+        # The declared unit-check stage follows lint, in lint's directory.
+        stopped = _axi().gate_unit_check_stage(
+            args, project_dir, _ops(), agent_id=agent, verb=verb)
     if stopped is not None:
         return stopped
 
@@ -1780,6 +1784,7 @@ def _add_gate_verbs(sub):
                                     "skips the lint stage."))
     _add_run_args(g)
     _axi().add_skip_lint_arg(g)
+    _axi().add_skip_unit_check_arg(g)
     _add_gate_cycle_arg(g)
     _axi().add_run_release_arg(g)
     _axi().add_gate_suites_arg(g)

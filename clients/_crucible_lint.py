@@ -375,6 +375,159 @@ def _emit_gate_lint_abort(ops, project_dir, agent_id, verb, marker, exit_code,
     return exit_code or 1
 
 
+# ── the gate's unit-check stage ─────────────────────────────────────────────
+#
+# A project's declared check of its unit tiers, run by every gate after its
+# lint stage, in the directory lint ran in. The `[unit-check]` table of
+# crucible.toml, read by the same configuration walk as `[lint]`:
+#
+# - `command`, a non-empty list of non-empty strings, required;
+# - `name`, the stage's name in the envelope, optional; the basename of the
+#   command's first word when absent.
+#
+# The command runs with the gate process's environment as it is: the client
+# adds no variable and loads no hook. Its exit is the verdict; nothing is
+# filed on the board.
+
+UNIT_CHECK_TABLE = "unit-check"
+UNIT_CHECK_GATE_STAGE = "unit-check"
+UNIT_CHECK_GATE_ABORT = "unit-check-gate-abort"
+UNIT_CHECK_NOT_DECLARED = "unit-check-not-declared"
+
+_SKIP_UNIT_CHECK_HELP = "Skip the gate's unit-check stage."
+
+
+def add_skip_unit_check_arg(parser):
+    """Register `--skip-unit-check` on a gate."""
+    parser.add_argument("--skip-unit-check", dest="skip_unit_check",
+                        action="store_true", help=_SKIP_UNIT_CHECK_HELP)
+
+
+def _unit_check_refusal(path, detail):
+    return LintRefused(
+        f"{path} declares a [{UNIT_CHECK_TABLE}] table whose {detail} -- write "
+        f"it as `command = [\"scripts/unit-check.sh\"]`, with an optional "
+        f"string `name`")
+
+
+def resolve_unit_check_declaration():
+    """The declared unit-check as `{"command", "name"}`, or None when no
+    `unit-check` key is declared at all. Raises `LintRefused`, naming the
+    file and the field, for a malformed table -- an empty table, or a
+    `unit-check` key that is not a table, is declared and so refused."""
+    path, table = _core._read_project_config(UNIT_CHECK_TABLE, raw=True)
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise LintRefused(
+            f"in {path}, `{UNIT_CHECK_TABLE}` is {table!r}, not a table "
+            f"-- write it as a [{UNIT_CHECK_TABLE}] table with `command = "
+            f"[\"scripts/unit-check.sh\"]`, and an optional string `name`")
+    command = table.get("command")
+    if not isinstance(command, list):
+        raise _unit_check_refusal(path, f"`command` is {command!r}, not a list")
+    if not command:
+        raise _unit_check_refusal(path, "`command` is an empty list")
+    if not all(isinstance(word, str) and word for word in command):
+        raise _unit_check_refusal(path, f"`command` {command!r} holds an empty "
+                                        f"or non-string entry")
+    name = table.get("name")
+    if "name" in table and not (isinstance(name, str) and name):
+        raise _unit_check_refusal(path, f"`name` is {name!r}, not a non-empty "
+                                        f"string")
+    return {"command": list(command),
+            "name": name or os.path.basename(command[0])}
+
+
+def run_unit_check_command(spec, run_dir):
+    """Run the declared command in `run_dir` with this process's environment
+    unchanged, stdout and stderr captured as one ordered stream. Returns
+    `(output, exit)`, the exit by the clients' runner exit convention."""
+    word = spec["command"][0]
+    try:
+        executable = resolve_lint_command(word, run_dir, os.environ.get("PATH"))
+    except LintRefused as refusal:
+        raise LintRefused(f"the unit-check command {word!r} was not found "
+                          f"-- {refusal}") from refusal
+    try:
+        result = subprocess.run(
+            [executable, *spec["command"][1:]], cwd=run_dir,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            check=False)
+    except OSError as error:
+        raise LintRefused(f"the unit-check command {word!r} could not be "
+                          f"run: {error}") from error
+    return result.stdout or "", lint_exit_code(result.returncode)
+
+
+def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
+                          run_dir=None, carried_warnings=()):
+    """A gate's fail-fast unit-check stage, run right after its lint stage in
+    the same `run_dir`. Returns None when the gate goes on -- the command
+    exited 0, the stage was skipped by `--skip-unit-check`, or no table is
+    declared (warned `unit-check-not-declared`) -- else emits the gate's one
+    envelope, stopped at `stage: unit-check` with `unit-check-gate-abort`,
+    and returns its exit. A malformed table or a command not found stops the
+    gate the same way, with the `error` naming it; nothing runs."""
+    if getattr(args, "skip_unit_check", False):
+        return None
+    spec = None
+    try:
+        spec = resolve_unit_check_declaration()
+        if spec is None:
+            _gate_carry["warnings"].append({
+                "code": UNIT_CHECK_NOT_DECLARED,
+                "detail": (f"{verb} skipped its unit-check stage: nothing is "
+                           f"declared in a [{UNIT_CHECK_TABLE}] table")})
+            return None
+        output, exit_code = run_unit_check_command(spec, run_dir or project_dir)
+    except LintRefused as refusal:
+        return _emit_gate_unit_check_abort(
+            ops, project_dir, agent_id, verb, spec, 1,
+            {"error": str(refusal)}, carried_warnings)
+    print(f"[crucible] {verb}: unit-check stage {spec['name']} exit={exit_code}",
+          file=sys.stderr)
+    if exit_code == 0:
+        return None
+    sys.stderr.write(output)
+    return _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb,
+                                       spec, exit_code, {},
+                                       carried_warnings)
+
+
+def _unit_check_remedy(spec):
+    """The abort's first `help` line: what to fix, naming the stage and its
+    command. A stage named by the command's basename already names it; a
+    declared `name` has the command's first word beside it. A declaration
+    refused before it named a command names the table."""
+    if spec is None:
+        named = UNIT_CHECK_TABLE
+    else:
+        word = spec["command"][0]
+        named = spec["name"]
+        if named != os.path.basename(word):
+            named = f"{named} (`{word}`)"
+    return f"fix what {named} reported, or pass --skip-unit-check"
+
+
+def _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb, spec,
+                                exit_code, fields, carried_warnings):
+    name = spec["name"] if spec else UNIT_CHECK_TABLE
+    ops.emit(verb, False,
+             {"stage": UNIT_CHECK_GATE_STAGE, "exit": exit_code,
+              "unitCheck": name, **fields,
+              "help": _core.gate_step_abort_help(verb, _unit_check_remedy(spec))},
+             ops.context(project_dir, agent_id=agent_id),
+             [*carried_warnings,
+              {"code": UNIT_CHECK_GATE_ABORT,
+               "detail": (f"{verb} stopped at its fail-fast unit-check stage "
+                          f"-- {name} failed; the tests never ran, so this "
+                          f"gate says NOTHING about the test suite")}],
+             f"{verb}: ok=False exit={exit_code} -- aborted at the unit-check "
+             f"stage")
+    return exit_code or 1
+
+
 # ── a lint record read back by `runs` and `run` ─────────────────────────────
 
 def lint_brief(brief, event):

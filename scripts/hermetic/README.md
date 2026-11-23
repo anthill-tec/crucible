@@ -105,6 +105,25 @@ own line is excluded.
 | 1 | at least one dependency event |
 | 2 | a log is missing or unreadable, because the hooks did not run |
 
+## `unit-check.sh [bun|python]...` (the unit tiers, recorded and judged)
+
+It runs each named unit tier with its hooks recording, then `unit-verdict.py` over every log it wrote.
+With no argument it runs both, bun then python. It runs from the repository root whatever the caller's
+directory, and keeps its logs in a fresh `mktemp -d` that it removes on exit.
+
+- **bun:** `HERMETIC_EVENTS=<dir>/bun-unit.tsv bun test --timeout 30000 --preload
+  ./scripts/hermetic/hooks/bun-preload.ts ./tests/unit`
+- **python:** `PYTHONPATH=<repo>/scripts/hermetic/hooks HERMETIC_EVENTS=<dir>/py-unit.tsv
+  .venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit`
+
+Every named tier runs even when an earlier one failed, so one run reports everything. It exits 1 when
+any tier failed or the verdict failed, 2 on an unknown tier name, and 0 otherwise.
+
+CI's `test-bun` and `test-python` jobs run it inside the wrapper, one tier each:
+`scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-unit" -- scripts/hermetic/unit-check.sh bun`.
+Crucible's own `crucible.toml` declares it as the pre-merge gate's unit-check stage
+(`[unit-check]` / `command = ["scripts/hermetic/unit-check.sh"]`, see `docs/RUNBOOK.md`).
+
 ## Example (a unit tier)
 
     scripts/hermetic/run.sh "$PWD/hermetic-logs/py-unit" -- \

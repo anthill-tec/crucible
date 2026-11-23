@@ -96,6 +96,16 @@ permissions:
 # doubling as the pin is how CI came to track the newest release.
 env:
   BUN_VERSION: "1.4.2"
+  # CR-CRU-274 §S4 -- THE uv version, the same way: written down HERE, once,
+  # and consumed by every setup-uv step via `version: "${{ env.UV_VERSION }}"`.
+  #
+  # WHY IT PINS AT ALL: setup-uv with no `version` installs LATEST, and two uv
+  # releases find a project differently. CI run 45200014350 went red on a test
+  # helper that only the newer uv treated as part of the project, while the
+  # workstation's older uv passed it. Pinned to 0.13.9, the version CI ran
+  # green on; the workstation is brought to the same version, and a bump is a
+  # deliberate commit, never a silent drift.
+  UV_VERSION: "0.13.9"
 
 jobs:
   build:
@@ -167,6 +177,7 @@ jobs:
       # release gate must not depend on an unpinned `curl | sh` network script.
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
+          version: "${{ env.UV_VERSION }}"
           enable-cache: false
       # The bun suite spawns the python client fleet, so this job runs python
       # too, and runs it on the declared floor rather than the image's python.
@@ -241,16 +252,13 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The unit tier records every dependency a test takes (the preload), and
       # its verdict over that log fails on any process, socket or real wait.
-      - name: Bun suite — unit tier (hermetic, dependency hooks recording)
+      # Both live in scripts/hermetic/unit-check.sh, the same script the local
+      # pre-merge gate runs as its unit-check stage, so recording and judging
+      # have one definition.
+      - name: Bun suite — unit tier and its verdict (hermetic)
         run: |
           scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-unit" -- \
-            env HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/bun-unit/events.tsv" \
-            bun test --timeout 30000 \
-            --preload ./scripts/hermetic/hooks/bun-preload.ts ./tests/unit
-      - name: Bun suite — unit tier verdict (no dependency event)
-        run: |
-          python3 scripts/hermetic/unit-verdict.py \
-            "$RUNNER_TEMP/hermetic/bun-unit/events.tsv"
+            scripts/hermetic/unit-check.sh bun
       - name: Bun suite — integration tier (hermetic)
         run: |
           scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-integration" -- \
@@ -301,6 +309,7 @@ jobs:
       # aborting the whole class (which is why CI discovered 673, not 683).
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
+          version: "${{ env.UV_VERSION }}"
           enable-cache: false
       # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
       # pyproject.toml (which declares it) and never restated here (AC8):
@@ -451,18 +460,14 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The unit tier records every dependency a test takes (the hooks, with
       # the tagging runner naming the running test), and its verdict over that
-      # log fails on any process, socket or real wait.
-      - name: Python client suite — unit tier (hermetic, hooks recording)
+      # log fails on any process, socket or real wait. Both live in
+      # scripts/hermetic/unit-check.sh, the same script the local pre-merge
+      # gate runs as its unit-check stage, so recording and judging have one
+      # definition.
+      - name: Python client suite — unit tier and its verdict (hermetic)
         run: |
           scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-unit" -- \
-            env PYTHONPATH="$PWD/scripts/hermetic/hooks" \
-            HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/py-unit/events.tsv" \
-            .venv/bin/python scripts/hermetic/tagging_runner.py \
-            tests/client/unit
-      - name: Python client suite — unit tier verdict (no dependency event)
-        run: |
-          python3 scripts/hermetic/unit-verdict.py \
-            "$RUNNER_TEMP/hermetic/py-unit/events.tsv"
+            scripts/hermetic/unit-check.sh python
       - name: Python client suite — integration tier (hermetic)
         run: |
           scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-integration" -- \

@@ -20,6 +20,20 @@ Releases before 0.3.0 are described only on GitHub Releases.
   failure. A lone run that is filed with no counts now also answers `ok: false`, with a
   `gate-suite-unreported` warning, while its exit stays 0.
 
+### Added
+
+- **A gate runs the project's declared unit check.** A project may declare a `[unit-check]` table in its
+  `crucible.toml` (`command`, a non-empty list of non-empty strings, and an optional `name`). Every client's
+  `pre-merge-gate` runs it right after its lint stage, in lint's directory, with the gate's environment
+  unchanged. A non-zero exit stops the gate at `stage: unit-check` with a `unit-check-gate-abort` warning, the
+  command's output on stderr, and no regression run. With no table the gate goes on, warning
+  `unit-check-not-declared`; `--skip-unit-check` skips the stage, and a malformed table is refused, naming the
+  file and the field. Crucible's own new `scripts/hermetic/unit-check.sh [bun|python]...` runs each unit tier
+  with its recording hooks and judges the logs with `unit-verdict.py`; CI now runs that script for each tier,
+  so the local gate can check the unit tiers as CI does. CI also pins uv at 0.13.9, and every e2e scenario's
+  page drops its routes at teardown, so a route mock still fetching can no longer fail a scenario that
+  passed. The RUNBOOK has a new "Unit check" section.
+
 ### Changed
 
 - **A rust tier verb runs the tests its kind names.** The rust client's `unit` now runs the lib, bin and

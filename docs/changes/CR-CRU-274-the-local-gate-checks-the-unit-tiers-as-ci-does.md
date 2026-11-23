@@ -1,6 +1,6 @@
 # CR-CRU-274: the local gate checks the unit tiers as CI does
 
-**Status:** PENDING. Filed 2026-11-23 after CI went red twice on develop, on tests that had passed the local pre-merge
+**Status:** COMPLETED (shipped 2026-11-24 on develop). Filed 2026-11-23 after CI went red twice on develop, on tests that had passed the local pre-merge
 gate. The gap analysis and the user's rulings of the same day are recorded below, under "Rulings".
 **Type:** maintenance
 **Points:** 5
@@ -111,3 +111,41 @@ From the gap analysis of the same day and the user's answers:
     count as events (S2's last point);
   - the clients stay project-agnostic, so the hooks and the verdict are the project's declared command, never a path
     the client knows.
+
+## Close-out (2026-11-24)
+
+**Plan 275.**
+
+- **Cycle 1021, RED/GREEN.**
+  - RED: 39 integration tests across all six clients' gates.
+  - GREEN:
+    - the stage lives in `clients/_crucible_lint.py`, which every gate calls after lint;
+    - `scripts/hermetic/unit-check.sh`;
+    - CI's unit steps call the script;
+    - `UV_VERSION` is pinned at 0.13.9;
+    - the e2e `page` fixture unroutes at teardown;
+    - the RUNBOOK and the CHANGELOG are updated.
+- **Cycle 1022, VERIFY:** PASS, with six should-fix items and five notes.
+- **Cycle 1023, FIX:**
+  - a `unit-check` key that is empty or not a table is refused; only an absent key means "not declared". `[lint]`
+    is unchanged.
+  - The field assertions were made able to fail.
+  - New cases: a missing command, a check warning carried onto the abort, and bun's `--package-dir`.
+  - The help line names both the stage and its command.
+  - The not-found reason is kept.
+  - The RUNBOOK and the CHANGELOG were reworded.
+- **Cycle 1024, FIX.** The gate on 1023 failed one bun test, which read `release.yml` as text and expected two
+  `bun test` steps. Under the user's rule that a test's subject is code that runs, that `describe` block was deleted:
+  the workflow is reviewed, not tested.
+- **AC5, shown at the gate.**
+  - A planted bun unit test that waited 1.5 s on a real timer stopped `pre-merge-gate` at `stage: unit-check` in 55 s.
+    The verdict was `unit-verdict: FAIL — 1 dependency event`, naming the file. The regression never ran.
+  - The planted test was then removed. It was never committed.
+- **Pre-merge gate (cycle 1024):** 13,413 passed and 0 failed, in about 28 minutes, with the unit-check stage clean
+  first. By suite: bun 5,076, python unit 2,624, python integration 5,713.
+- **Operator state at the merge:**
+  - this checkout's git-ignored `crucible.toml` declares `[unit-check] command = ["scripts/hermetic/unit-check.sh"]`;
+  - the workstation's uv is now 0.13.9.
+- **AC6** is confirmed by the first green CI run after the merge.
+- **Follow-ups (not this CR):** two older checks in `tests/integration/pipeline-test-timeout-default.test.ts` read
+  source text rather than running code, and are left for a later cull.

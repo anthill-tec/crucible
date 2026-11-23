@@ -301,7 +301,7 @@ def shipped_limits():
             for name in CLIENT_LIMIT_NAMES}
 
 
-def _read_project_config(table=LIMITS_TABLE):
+def _read_project_config(table=LIMITS_TABLE, *, raw=False):
     """One walk of the chain, at the point of use -- never cached.
 
     Returns `(path, tables)` for the FIRST candidate that read: a file that is
@@ -309,6 +309,12 @@ def _read_project_config(table=LIMITS_TABLE):
     rather than degrading on the spot. `tables` is None only when NONE of the
     candidates read, and `path` is then the first of them -- the file an
     operator should create.
+
+    With `raw`, `tables` is the key's value exactly as the file holds it --
+    None when the key is absent, and whatever it is otherwise, a table or
+    not -- for a caller that refuses a key present in the wrong shape rather
+    than reading it as undeclared. Without it a value that is not a table
+    reads as an empty one.
 
     `table` names the TOP-LEVEL table wanted -- `[limits]` for the three a
     client enforces, `[gate]` for the skip list. CR-CRU-139's `[client]` is
@@ -328,6 +334,8 @@ def _read_project_config(table=LIMITS_TABLE):
             # DEGRADE, never take a client's verb down with it.
             continue
         tables = parsed.get(table)
+        if raw:
+            return path, tables
         return path, tables if isinstance(tables, dict) else {}
     return candidates[0], None
 
