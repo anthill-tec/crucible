@@ -6,7 +6,8 @@ promised to Model B for 0.5.0 in Sandesh #1621/#1622)
 **Type:** feature
 **Points:** 8
 **Wave:** 9 (0.5.0)
-**Depends on:** CR-CRU-267, CR-CRU-268, CR-CRU-269 (the switch set it joins)
+**Depends on:** CR-CRU-267, CR-CRU-268, CR-CRU-269 (the switch set it joins), CR-CRU-274 (the gate's unit-check
+stage)
 **Labels:** client, isolation, tiers
 **Design reference:** CR-CRU-263 (`scripts/hermetic/`, the CI tripwire); the prototype in
 `test-reports/work/leak-census/` (`board-tripwire.py`, `run-census.sh`, `stamp.py`, `py-runner.py`); the gap analysis
@@ -25,8 +26,9 @@ run commits never reaches the board.
 
 ## Behaviour
 
-- **S1 — one switch on every tier verb.** Every client's tier verbs, `test` and `regression` take the same switch
-  for an isolated run. The gap analysis settles its name; it is part of the standard set CR-CRU-267 settles. The run
+- **S1 — one switch on every tier verb.** Every client's tier verbs, `test`, `regression` and `pre-merge-gate` take
+  the same switch for an isolated run (amended 2026-11-23 by CR-CRU-274's rulings: the gate takes it too, and a
+  hermetic gate runs its declared unit-check stage inside the namespace as well). The gap analysis settles its name; it is part of the standard set CR-CRU-267 settles. The run
   then happens:
   - in a clean copy of the project at its committed state;
   - under an empty `HOME` and empty caches, beyond what the project declares it may provision;
@@ -53,8 +55,8 @@ To be made precise by the gap analysis. At least:
 - **AC2** — the same project's clean tests, run with the switch, file green and leave the operator's `HOME`,
   caches and board untouched.
 - **AC3** — where the namespace is unavailable, the switch is refused with an envelope saying why, and nothing runs.
-- **AC4** — the switch is accepted by every client's tier verbs, `test` and `regression`, with the same name and
-  meaning.
+- **AC4** — the switch is accepted by every client's tier verbs, `test`, `regression` and `pre-merge-gate`, with the
+  same name and meaning. A hermetic gate runs its unit-check stage (CR-CRU-274) inside the namespace.
 - **AC5** — the RUNBOOK and `CHANGELOG.md`'s `## [Unreleased]` describe the switch, its default tripwires and its
   platform limit.
 
