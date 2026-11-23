@@ -524,6 +524,20 @@ class BunGateRunsItsDeclaredUnitCheckTest(_EveryGateUnitCheckCases, unittest.Tes
     def is_test(self, call):
         return call["tool"] == "bun" and _first_word(call) == "test"
 
+    def test_the_stage_runs_in_a_sub_package_named_by_package_dir(self):
+        path = self.unit_check(exit_code=0)
+        root = self.declared_project(path)
+        package = root / "packages" / "app"
+        package.mkdir(parents=True)
+        result, axi = self.drive_gate(root, "--package-dir", str(package))
+        why = self.why(result, axi)
+        self.assertGateEnvelope(result, axi)
+        calls = self.unit_check_calls()
+        self.assertEqual(len(calls), 1, f"the declared unit-check runs once; {why}")
+        self.assertEqual(os.path.realpath(calls[0]["cwd"]), os.path.realpath(package),
+                         f"unit-check runs in the package dir, not the project "
+                         f"dir; {why}")
+
 
 # ── arduino ─────────────────────────────────────────────────────────────────
 
