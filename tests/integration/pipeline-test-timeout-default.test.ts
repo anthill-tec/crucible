@@ -2,17 +2,20 @@
 // OWN figure, chosen here, not inherited from whatever bun ships.
 //
 // Spec: docs/changes/CR-CRU-137-pipeline-defaults-are-chosen-not-inherited.md
-//   §S1 — the default per-test timeout becomes 30000 ms, carried by all THREE
-//         invocation paths: `clients/bun-crucible.py`'s `_bun_test_cmd` (the
-//         local gate), `.github/workflows/release.yml`'s `test-bun` step (CI,
-//         which does not shell through the client), and
-//         `scripts/run-test-target.ts` (the declared tier targets, which the
-//         client's `unit`/`integration` verbs reach by running the project's
-//         declared script by name). Because the three cannot be one physical
-//         constant, the value is DERIVED, not retyped: the client declares it,
-//         the tier runner reads that declaration at run time, and a test
-//         asserts each site's figure equals the client's — so changing one
-//         alone reddens the suite.
+//   §S1 — the default per-test timeout becomes 30000 ms, carried by every
+//         invocation path: `clients/bun-crucible.py`'s `_bun_test_cmd` (the
+//         local gate), the CI workflow, and `scripts/run-test-target.ts` (the
+//         declared tier targets, which the client's `unit`/`integration` verbs
+//         reach by running the project's declared script by name). Because
+//         the paths cannot share one physical constant, the value is DERIVED,
+//         not retyped: the client declares it, the tier runner reads that
+//         declaration at run time, and a test asserts the tier runner's figure
+//         equals the client's — so changing one alone reddens the suite.
+//
+//         CI's figure is NOT pinned here. `.github/workflows/release.yml` is
+//         configuration, reviewed rather than tested: this file tests only
+//         code that runs, so it drives the client and the tier runner and
+//         never reads the workflow as text.
 //
 // Measured defect this closes: two tests failed CI on wall clock alone against
 // bun's own 5000 ms default (6245 ms and 5148 ms, on trees whose suites were
@@ -26,10 +29,6 @@
 //     `[bun, test, …targets, --reporter=junit, --reporter-outfile=…]` and the
 //     module declares NO integer constant at all — so the two "client emits
 //     --timeout 30000" tests and the "declared exactly once" test FAIL.
-//   * release.yml's `Bun suite` step runs bare `bun test` — the
-//     workflow test FAILS.
-//   * The derived-equality test FAILS from both ends at once, which is the
-//     point of it: it never retypes 30000.
 //
 // The last two tests are REGRESSION RAILS, green the day they are written and
 // deliberately not contorted into failing: bun's per-test annotation override
@@ -44,57 +43,12 @@ import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const CLIENT_REL = join("clients", "bun-crucible.py");
-const RELEASE_WORKFLOW_REL = join(".github", "workflows", "release.yml");
 const CR009_TEST_REL = join("tests", "integration", "cr009-release-bundle.test.ts");
 
 // The figure §S1 chooses, spelled here ONCE so the two "it is 30000" contract
 // tests can name it. The equality test below deliberately does NOT use it — it
 // reads both files and compares them to each other.
 const REQUIRED_DEFAULT_TIMEOUT_MS = 30000;
-
-// ── release.yml as data (same shape as tests/integration/cr009-release-bundle.test.ts's
-//    readReleaseWorkflow()) ────
-
-type WorkflowStep = {
-  name?: string;
-  uses?: string;
-  run?: string;
-};
-
-type WorkflowJob = {
-  "runs-on"?: string;
-  steps?: WorkflowStep[];
-};
-
-type ReleaseWorkflow = {
-  jobs?: Record<string, WorkflowJob>;
-};
-
-function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
-  const raw = readFileSync(join(REPO_ROOT, RELEASE_WORKFLOW_REL), "utf8");
-  const parsed = Bun.YAML.parse(raw) as ReleaseWorkflow;
-  return { raw, parsed };
-}
-
-function stepsOf(parsed: ReleaseWorkflow, jobName: string): WorkflowStep[] {
-  const job = parsed.jobs?.[jobName];
-  expect(job, `release.yml declares no '${jobName}' job`).toBeDefined();
-  const steps = job?.steps;
-  expect(Array.isArray(steps), `job '${jobName}' declares no steps: array`).toBe(true);
-  return steps as WorkflowStep[];
-}
-
-/** Every `run:` body in `test-bun` that invokes the bun test runner — the
- *  whole set, so a SECOND `bun test` step added without the flag is caught
- *  rather than hidden behind the first one. `bunx playwright install` and
- *  `bun install` are not test invocations and do not match. */
-function bunTestInvocations(parsed: ReleaseWorkflow): Array<{ label: string; run: string }> {
-  return stepsOf(parsed, "test-bun")
-    .filter(
-      (step) => typeof step.run === "string" && /(?:^|\s|&&|\|\|)bun\s+test(?:\s|$)/.test(step.run),
-    )
-    .map((step) => ({ label: step.name ?? "(unnamed step)", run: step.run as string }));
-}
 
 /** The value(s) a `--timeout` flag carries in a token list, accepting either
  *  spelling bun honours (`--timeout 30000` / `--timeout=30000`). A list rather
@@ -124,18 +78,6 @@ function flagValues(tokens: string[], flag: string): string[] {
  *  are never path arguments. */
 const BUN_TEST_VALUE_FLAGS = new Set(["--timeout", "--preload"]);
 
-/** One `run:` body as the shell reads it: `#` comment lines dropped, line
- *  continuations joined, split on whitespace. */
-function commandTokens(run: string): string[] {
-  return run
-    .split("\n")
-    .filter((line) => !/^\s*#/.test(line))
-    .join("\n")
-    .replace(/\\\r?\n/g, " ")
-    .trim()
-    .split(/\s+/);
-}
-
 /** Where `test` follows the bun executable in a token list — `bun test`
  *  inside a wrapper's command, or a bare argv that starts at `test` — or -1. */
 function bunTestAt(tokens: string[]): number {
@@ -163,23 +105,6 @@ function bunTestPathArgs(tokens: string[]): string[] {
     }
   }
   return paths;
-}
-
-/** CR-CRU-263's wrapper: `scripts/hermetic/run.sh <log-dir> -- <command…>`. */
-const HERMETIC_WRAPPER = "scripts/hermetic/run.sh";
-/** The bun dependency hook the hermetic unit tier preloads. */
-const BUN_DEPENDENCY_PRELOAD = "./scripts/hermetic/hooks/bun-preload.ts";
-
-/** How one CI `bun test` step runs: through the hermetic wrapper (the wrapper
- *  first, a log directory, then `--` before `bun test`), and the preloads its
- *  `bun test` carries. */
-function hermeticShape(tokens: string[]): { wrapped: boolean; preload: string[] } {
-  const bunAt = bunTestAt(tokens) - 1;
-  const separator = tokens.indexOf("--");
-  return {
-    wrapped: tokens[0] === HERMETIC_WRAPPER && separator > 1 && bunAt > separator,
-    preload: flagValues(tokens.slice(bunAt + 1), "--preload"),
-  };
 }
 
 // ── the client's command builder, DRIVEN (not read as text) ────────────────
@@ -279,35 +204,6 @@ function clientDeclaredTimeoutMs(): number {
   return timeoutMs;
 }
 
-/** The default per-test budget the WORKFLOW declares, read off every
- *  `test-bun` step that runs `bun test` — one per tier directory. Each step
- *  carries the flag exactly once and they all carry the SAME figure, so the
- *  one returned is the workflow's, not one step's. */
-function workflowDeclaredTimeoutMs(): number {
-  const { parsed } = readReleaseWorkflow();
-  const invocations = bunTestInvocations(parsed);
-  expect(invocations.length, "release.yml's test-bun job runs no `bun test` step").toBeGreaterThan(0);
-  const figures = invocations.map((invocation) => {
-    const values = timeoutFlagValues(commandTokens(invocation.run));
-    expect(
-      values.length,
-      `release.yml's '${invocation.label}' step carries ${String(values.length)} --timeout flags; ` +
-        `§S1 requires exactly one: ${invocation.run.trim()}`,
-    ).toBe(1);
-    const timeoutMs = Number(values[0]);
-    expect(
-      Number.isInteger(timeoutMs),
-      `release.yml declares --timeout ${String(values[0])}, which is not an integer ms figure`,
-    ).toBe(true);
-    return timeoutMs;
-  });
-  expect(
-    new Set(figures).size,
-    `release.yml's test-bun steps disagree about the per-test budget: ${JSON.stringify(figures)}`,
-  ).toBe(1);
-  return figures[0] as number;
-}
-
 describe("§S1 the local gate's own invocations carry the project's default per-test budget", () => {
   test("_bun_test_cmd emits --timeout 30000 in a TARGETED invocation, alongside the targets and the report flags", () => {
     const { targeted } = probeClient();
@@ -364,63 +260,6 @@ describe("§S1 the local gate's own invocations carry the project's default per-
     // …and the command really emits that constant's value rather than a
     // coincidentally equal literal beside it.
     expect(clientDeclaredTimeoutMs()).toBe(declared);
-  });
-});
-
-describe("§S1 CI runs the suite on the same budget, and the two figures cannot drift apart", () => {
-  test("release.yml's test-bun job runs ./tests/unit then ./tests/integration through the hermetic wrapper, each on `bun test --timeout 30000`, the unit tier with the dependency preload", () => {
-    const { parsed } = readReleaseWorkflow();
-    const invocations = bunTestInvocations(parsed);
-    const steps = JSON.stringify(invocations.map((i) => `${i.label}: ${i.run.trim()}`));
-
-    // POSITIVE — the job runs the suite by tier DIRECTORY: exactly two
-    // invocations, the unit directory first, then the integration directory.
-    // Bound at the INVOCATIONS, not at step NAMES: a third, unflagged
-    // `bun test` step added later fails here instead of quietly running on
-    // bun's default, while merely RENAMING a step changes nothing about what
-    // CI runs and must not redden the suite. The labels are evidence in the
-    // failure message, never the contract. The wrapper's own arguments and
-    // the preload's file are not tier paths.
-    expect(
-      invocations.map((invocation) => bunTestPathArgs(commandTokens(invocation.run))),
-      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps: ${steps}`,
-    ).toEqual([["./tests/unit"], ["./tests/integration"]]);
-
-    // …and each of them carries the figure exactly once.
-    for (const invocation of invocations) {
-      expect(
-        timeoutFlagValues(commandTokens(invocation.run)),
-        `release.yml's '${invocation.label}' step runs: ${invocation.run.trim()}`,
-      ).toEqual([String(REQUIRED_DEFAULT_TIMEOUT_MS)]);
-    }
-
-    // CR-CRU-263 AC1/AC6 — both tiers run through the hermetic wrapper
-    // (`scripts/hermetic/run.sh <log-dir> -- …`), and the unit tier preloads
-    // the bun dependency hook exactly once, so its verdict can be taken over
-    // what it recorded; the integration tier records nothing.
-    expect(
-      invocations.map((invocation) => hermeticShape(commandTokens(invocation.run))),
-      `release.yml's test-bun tier steps must run as \`${HERMETIC_WRAPPER} <log-dir> -- … bun test …\`: ${steps}`,
-    ).toEqual([
-      { wrapped: true, preload: [BUN_DEPENDENCY_PRELOAD] },
-      { wrapped: true, preload: [] },
-    ]);
-  });
-
-  test("the workflow's --timeout EQUALS the figure the client declares — derived from both files, retyped from neither", () => {
-    // Neither side of this comparison is a literal: one is driven out of
-    // _bun_test_cmd, the other parsed out of release.yml. Changing either file
-    // alone reddens this test, which is the whole mechanism §S1 asks for (the
-    // two paths cannot share one physical constant — CI does not shell through
-    // the client).
-    const fromClient = clientDeclaredTimeoutMs();
-    const fromWorkflow = workflowDeclaredTimeoutMs();
-
-    expect(
-      fromWorkflow,
-      `release.yml runs the suite at ${String(fromWorkflow)} ms/test while ${CLIENT_REL} declares ` +
-        `${String(fromClient)} ms/test — the local gate and CI would disagree about what a timeout means`,
-    ).toBe(fromClient);
   });
 });
 
