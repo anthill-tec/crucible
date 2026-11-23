@@ -1455,7 +1455,7 @@ def _test_run(args, tier, kinds, profile, project_dir, identity):
             return _refuse_tier_run(
                 verb, project_dir, args.agent,
                 _empty_selection_refusal(tier, kinds, args.filter),
-                code=TIER_SELECTION_EMPTY_CODE)
+                code=_axi().TIER_SELECTION_EMPTY_CODE)
     if not args.agent:
         cmd = (["cargo", "nextest", "run"] + selection
                + (["--no-fail-fast"] if args.no_fail_fast else []))
@@ -1509,8 +1509,6 @@ INTEGRATION_KINDS = "kind(test)"
 #: undeclared tier falls back to).
 _CI_PROFILE = "ci"
 _NEXTEST_BUILTIN_PROFILES = ("default", "default-miri")
-#: The code of a kind-filter selection whose list names no test.
-TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
 
 
 def cmd_unit(args):

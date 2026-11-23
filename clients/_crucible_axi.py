@@ -2349,6 +2349,10 @@ def emit_cycle_selection_hard_stop(verb, refusal, context=None):
 
 TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 
+#: The code of a tier run whose selection holds no test: refused, and nothing
+#: filed. One code for every client that checks its selection.
+TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
+
 
 def tier_run_undeclared_help(tier, declared, surface):
     """§S1/§S3 — the next moves for a tier with no declared target: declare one
@@ -7171,7 +7175,7 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                     crucible_url, warnings=(), named=None, run_suite=None,
-                    whole_framework=None, whole_script=None):
+                    whole_framework=None, whole_script=None, covered_by=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -7210,7 +7214,12 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     them, excluded ones included, is such a suite, the whole-suite run is
     skipped, and the envelope says so. When `whole_script` names the script
     the whole-suite run is, that run is never skipped, only that script's
-    suite is covered by it, and every other own-stack suite is `run_suite`'s."""
+    suite is covered by it, and every other own-stack suite is `run_suite`'s.
+
+    `covered_by`, when given, is `(suite) -> text`: what a rule-3 row's
+    `coveredBy` says, for a stack whose whole-suite run does not run a
+    declared target the way that target declares it. Unset, the row names
+    the whole-suite run (`whole_suite_label`)."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
     scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
@@ -7285,7 +7294,8 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             # Rule 3 — covered by the run that already happened, and SAYING so
             # rather than collecting the same files a second time. The counts
             # are that run's, and they are NOT added to the union again.
-            row["coveredBy"] = whole_suite_label(stack)
+            row["coveredBy"] = (covered_by(suite) if covered_by is not None
+                                else whole_suite_label(stack))
             row.update(whole_counts or {})
             row["outcome"] = whole_outcome
             rows.append(row)
@@ -7505,7 +7515,8 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                     context, crucible_url, whole_suite_alone=None,
-                    run_suite=None, whole_framework=None, whole_script=None):
+                    run_suite=None, whole_framework=None, whole_script=None,
+                    covered_by=None):
     """§S1/§S2 — the GATE's regression step: the one composition all six gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7535,7 +7546,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                            named=scoped_gate_targets(args),
                            run_suite=run_suite,
                            whole_framework=whole_framework,
-                           whole_script=whole_script)
+                           whole_script=whole_script,
+                           covered_by=covered_by)
 
 
 # ── the run and ingest pipeline lives in `_crucible_run.py` ─────────────────

@@ -52,9 +52,10 @@ uv.lock
 /.worktrees/
 # Build output the live maven fixture project's own build leaves behind (the
 # live e2e runs `mvn clean test` on a /tmp copy, so its target/ is never an
-# input). Only that project's target/ is ignored: the target/ dirs under
+# input). Only those projects' target/ is ignored: the target/ dirs under
 # tests/fixtures/reports/mvn/ hold hand-written report fixtures, tracked.
 tests/fixtures/surefire-live-project/target/
+tests/fixtures/failsafe-live-project/target/
 # CR-CRU-260 — the test suite's own toolchain caches (maven repository, go
 # build and module caches, uv cache), filled by
 # scripts/provision-test-caches.sh and kept between runs. Machine-local and

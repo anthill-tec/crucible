@@ -72,7 +72,7 @@ Examples:
   # Compile-only (ingest RED compile failure)
   mvn-crucible.py compile --module runtime --agent CR-SU-8-C1-RED
 
-  # E2E (failsafe / @QuarkusIntegrationTest, JVM)
+  # E2E (the pom.xml's `e2e` profile: failsafe / @QuarkusIntegrationTest, JVM)
   mvn-crucible.py e2e --agent CR-ES-12-VERIFY --system-prop api.version=1.4.2
   # E2E native (package already built): just run failsafe
   mvn-crucible.py e2e --failsafe-only --native --agent CR-ES-12-VERIFY
@@ -82,7 +82,7 @@ Examples:
 
   # Override maven dir (monorepo backend) / project
   mvn-crucible.py unit --maven-dir backend --test FooTest --agent X
-  MVN_CRUCIBLE_PROJECT_DIR=/path/to/repo mvn-crucible.py module --agent X
+  MVN_CRUCIBLE_PROJECT_DIR=/path/to/repo mvn-crucible.py module --module runtime --agent X
 """
 
 # pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
@@ -486,6 +486,15 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
 
 
+class _ConsoleCapture:
+    """The observer of a run nothing narrates: it reads no line, and its
+    presence alone has the run's console teed to stderr and captured."""
+
+    def observe(self, line):
+        """Nothing is read from `line`; the run's own capture keeps it."""
+        del line
+
+
 # --------------------------------------------------------------------------- #
 # Agent lifecycle
 # --------------------------------------------------------------------------- #
@@ -560,8 +569,12 @@ def _ran_nothing(result, dirs):
     """Whether the runner exited non-zero while the reports in `dirs` hold no
     results — the shared `ran_nothing` over every `TEST-*.xml` the run wrote.
     `dirs` holding no report at all is the compile fallback's case, not this."""
-    reports = sorted(path for d in dirs
-                     for path in glob.glob(os.path.join(d, "TEST-*.xml")))
+    return _reports_ran_nothing(result, sorted(
+        path for d in dirs for path in glob.glob(os.path.join(d, "TEST-*.xml"))))
+
+
+def _reports_ran_nothing(result, reports):
+    """`_ran_nothing` over the report paths `reports` themselves."""
     return bool(reports) and _axi().ran_nothing(
         result.returncode, _axi().junit_testcase_count(reports))
 
@@ -624,12 +637,13 @@ def _run_read_dirs(maven_dir, module, kinds, reports_dir):
     return dirs
 
 
-def _claim_pinned_reports(maven_dir, module, kinds, reports_dir):
+def _claim_pinned_reports(maven_dir, module, kinds, reports_dir, since=None):
     """A POM that pins surefire's/failsafe's own `reportsDirectory` in its
     plugin configuration overrides the `-D` location, so Maven wrote to its
     `target/<kind>-reports` instead. When the run's own directory holds no
     TEST-*.xml after the run but those dirs do, move them in and return one
-    warning per plugin that was overridden; nothing to do otherwise."""
+    warning per plugin that was overridden; nothing to do otherwise. With
+    `since`, only the reports written at or after it are this run's."""
     if reports_dir is None or glob.glob(os.path.join(reports_dir, "TEST-*.xml")):
         return []
     warnings = []
@@ -637,6 +651,7 @@ def _claim_pinned_reports(maven_dir, module, kinds, reports_dir):
         written = []
         for d in _report_dirs(maven_dir, module, kind):
             written += glob.glob(os.path.join(d, "TEST-*.xml"))
+        written = _fresh(written, since)
         for path in written:
             shutil.move(path, os.path.join(reports_dir, os.path.basename(path)))
         if written:
@@ -919,9 +934,30 @@ class _RunConsole:
 # --------------------------------------------------------------------------- #
 # Test-tier commands
 # --------------------------------------------------------------------------- #
-def _run_surefire_tier(args, goal_extra, label):
-    """Shared body for `unit` and `module`: mvn clean test [...], then ingest
-    surefire. On no-reports, compile fallback. Surefire only, NEVER coverage.
+#: The plugins whose reports a tier run reads: surefire's (`*Test`), failsafe's
+#: (`*IT`), or both; and the two `reportsDirectory` flags a failsafe run passes.
+_SUREFIRE = ("surefire",)
+_FAILSAFE = ("failsafe",)
+_BOTH_PLUGINS = ("failsafe", "surefire")
+_BOTH_PLUGINS_FLAGS = ("surefire", "failsafe")
+#: The lifecycle a tier verb hands maven: surefire's `test` phase, or the
+#: `verify` phase failsafe's own verification is bound to.
+_TEST_PHASE = ("clean", "test")
+_VERIFY_PHASE = ("clean", "verify")
+#: What an undeclared `integration` adds to `clean verify`, so surefire selects
+#: no test and failsafe runs alone.
+_SKIP_SUREFIRE = ("-Dtest=!*", "-Dsurefire.failIfNoSpecifiedTests=false")
+#: The console line surefire and failsafe fail with when a pattern selects
+#: nothing.
+_NO_TESTS_MATCHING = "No tests matching pattern"
+#: The `run:` block of a run that was not filed: no figures.
+_UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
+
+
+def _run_surefire_tier(args, goal_extra, label, kinds=None):
+    """Shared body for `unit` and `module`: `mvn clean test [...]`, then the
+    run's `kinds` reports filed under `label` (surefire's by default, or every
+    report a declared profile's run wrote). Surefire only, NEVER coverage.
     The run's `[targets.<label>]` declaration is checked first."""
     _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
@@ -930,17 +966,30 @@ def _run_surefire_tier(args, goal_extra, label):
                           f"gated {label} run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
-        return _surefire_tier_run(args, goal_extra, label, project_dir, identity)
+        return _tier_run(args, [*_TEST_PHASE, *goal_extra], label,
+                         kinds or _SUREFIRE, project_dir, identity)
 
 
-def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
-    """`_run_surefire_tier`'s run body, inside its gated-identity bracket."""
+def _tier_run(args, goals, label, kinds, project_dir, identity,
+              fresh_only=False):
+    """The run body every tier verb but `regression` shares, inside its
+    gated-identity bracket: maven handed `goals`, then the `kinds` reports
+    this run wrote filed under `label`.
+
+    A selection that ran no test is refused after maven exits and before
+    anything is filed, on both paths (`_selection_is_empty`): the opened run
+    is aborted, no compile record is filed and maven is not run again. A run
+    with no report that is not such a selection is a build failure and takes
+    the compile fallback. `fresh_only` reads only the reports written after
+    the run started, for a run made without `clean`."""
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    module = getattr(args, "module", None)
     common = _common_mvn_flags(args)
     reports_dir = _run_reports_dir(args, project_dir)
     _prepare_reports_dir(reports_dir)
-    cmd = (_mvn_base(maven_dir) + ["clean", "test"] + goal_extra + common
-           + _reports_dir_flags(reports_dir, ("surefire",)))
+    flag_kinds = _BOTH_PLUGINS_FLAGS if "failsafe" in kinds else _SUREFIRE
+    cmd = (_mvn_base(maven_dir) + list(goals) + common
+           + _reports_dir_flags(reports_dir, flag_kinds))
     env = os.environ.copy()
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
@@ -954,14 +1003,15 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, label, reports_dir)
+    # Reports older than this were not written by this run.
+    since = int(time.time()) if fresh_only else None
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting is measured here and says so in its
-    # own envelope. `module` runs this same body and is left alone, because the
-    # shared check is scoped to `unit` by the tier it is handed.
-    # A signal while the run is open is trapped and the open run disclosed.
-    # The run opens before the `try`, so a signal during its opening reaches
-    # the gated bracket; the relay starts inside it, so any exception after
-    # the relay starts finishes it.
+    # own envelope; the shared check is scoped to `unit` by the tier it is
+    # handed. A signal while the run is open is trapped and the open run
+    # disclosed. The run opens before the `try`, so a signal during its opening
+    # reaches the gated bracket; the relay starts inside it, so any exception
+    # after the relay starts finishes it.
     if args.agent:
         # The shared run path: open the run BEFORE maven is spawned so the
         # board shows it running, relay a declared console to it, and
@@ -974,9 +1024,8 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
         if args.agent:
             console.start(project_dir, args.agent, run_id)
             narrator = _narrator(project_dir, args.agent,
-                                 _xml_total_for(maven_dir,
-                                                getattr(args, "module", None),
-                                                ("surefire",), reports_dir),
+                                 _xml_total_for(maven_dir, module, kinds,
+                                                reports_dir),
                                  identity, console.poster)
             run_warnings = list(preflight_warnings) + run_warnings
             # §S1 — a release run's note rides ahead of the run's own
@@ -985,8 +1034,11 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
                 run_warnings = [_axi().release_run_note(release)] + run_warnings
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id), \
                 console.observer(narrator) as observer:
+            # The console is captured on both paths: an empty selection is
+            # read from it, and stdout carries the envelope alone.
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
+                                 observer if observer is not None
+                                 else _ConsoleCapture())
     except _axi().RunAbandoned as abandoned:
         # What maven wrote before the signal reaches the board before the run
         # is aborted.
@@ -1002,15 +1054,22 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     console.finish(_CONSOLE_FINISH_SECONDS)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
+        if _selection_is_empty(result, _written_reports(maven_dir, module, kinds,
+                                                        reports_dir, since)):
+            return _refuse_empty_selection(label, kinds, args, project_dir,
+                                           None, [])
         return result.returncode
     runner_exit = _axi().runner_exit_code(result.returncode)
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     pinned_warnings = run_warnings + _claim_pinned_reports(
-        maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
-    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, getattr(args, "module", None),
-                                         ("surefire",), reports_dir))
-    if not dirs:
+        maven_dir, module, kinds, reports_dir, since)
+    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, module, kinds, reports_dir))
+    paths = _fresh(_report_paths(dirs), since)
+    if _selection_is_empty(result, paths):
+        return _refuse_empty_selection(label, kinds, args, project_dir, run_id,
+                                       pinned_warnings)
+    if not paths:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
                                              args.agent, common, run_id=run_id,
                                              release=release)
@@ -1020,7 +1079,7 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
         # the compile ingest answered.
         return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
-    if _ran_nothing(result, dirs):
+    if _reports_ran_nothing(result, paths):
         return _axi().emit_ran_nothing(
             label, "surefire reports", result.returncode,
             getattr(result, "stdout", None) or "", run_id, pinned_warnings,
@@ -1028,7 +1087,7 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
             agent_id=args.agent)
     # No client-side cycle resolution: a bound agent's run is server-stamped
     # with its registered cycle. The subcommand name IS the tier.
-    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
+    resp = _file_reports(project_dir, args.agent, paths,
                          raw=getattr(result, "stdout", None), tier=label,
                          context=_run_context(), run_id=run_id,
                          release=release, runner_exit=runner_exit,
@@ -1042,6 +1101,76 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     # The exit carries the runner's verdict and the filed run's, and a
     # refused ingest is never green.
     return _axi().verb_exit(runner_exit, resp)
+
+
+def _fresh(paths, since):
+    """The reports in `paths` written at or after `since`; all of them when
+    `since` is None."""
+    if since is None:
+        return list(paths)
+    return [path for path in paths if os.path.getmtime(path) >= since]
+
+
+def _written_reports(maven_dir, module, kinds, reports_dir, since):
+    """The `kinds` reports a run with no agent wrote, read where they lie and
+    moved nowhere: the run's own directory, else maven's `target` dirs."""
+    paths = _report_paths(_dirs_with_xml(_run_read_dirs(maven_dir, module, kinds,
+                                                        reports_dir)))
+    if not paths and reports_dir is not None:
+        paths = _report_paths(_dirs_with_xml(_run_read_dirs(maven_dir, module,
+                                                            kinds, None)))
+    return _fresh(paths, since)
+
+
+def _selection_is_empty(result, paths):
+    """Whether a tier run's selection ran no test: maven exited 0 and the
+    reports the verb reads (`paths`) hold no test case, or maven failed with
+    surefire's or failsafe's "No tests matching pattern". A report whose
+    count cannot be read is never an empty selection."""
+    if result.returncode == 0:
+        return _axi().junit_testcase_count(paths) == 0
+    return _NO_TESTS_MATCHING in (getattr(result, "stdout", None) or "")
+
+
+def _refuse_empty_selection(label, kinds, args, project_dir, run_id, warnings):
+    """An empty selection's answer: the run this verb opened (if any) aborted,
+    and ONE `ok: false` envelope carrying `tier-selection-empty`. Nothing is
+    filed and maven is not run again. Returns the exit, 1."""
+    refusal = _empty_selection_refusal(label, kinds, getattr(args, "test", None))
+    closing = []
+    if run_id:
+        closing = [_axi().abort_run(_post, _project_key(project_dir), args.agent,
+                                    run_id, f"the {label} selection ran no test")]
+    return _refuse_tier_run(label, project_dir, getattr(args, "agent", None),
+                            refusal, code=_axi().TIER_SELECTION_EMPTY_CODE,
+                            warnings=list(warnings) + closing)
+
+
+def _empty_selection_refusal(label, kinds, test_pattern):
+    """(PURE) What a selection that ran no test says."""
+    if kinds == _FAILSAFE:
+        return (f"`{label}` runs failsafe's integration tests and this run's "
+                f"failsafe reports hold no test: the project binds no "
+                f"failsafe, or failsafe found no test to run; nothing was "
+                f"filed — bind maven-failsafe-plugin and add an `*IT` test, or "
+                f"declare a `{label}` profile in pom.xml")
+    narrowed = f" `-Dtest={test_pattern}`" if test_pattern else ""
+    return (f"the `{label}` run's selection{narrowed} ran no test; nothing "
+            f"was filed — widen the selection, or declare a `{label}` profile "
+            f"in pom.xml")
+
+
+def _refuse_tier_run(verb, project_dir, agent, refusal, code=None, warnings=()):
+    """A tier run refused before anything was filed: ONE `ok: false`
+    envelope naming why (and its `code`, when it has one). Returns the exit."""
+    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+    fields = {"run": _UNFILED_RUN, "error": refusal}
+    if code:
+        fields["code"] = code
+    fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]
+    _emit_axi(verb, False, fields, _axi_context(project_dir, agent_id=agent),
+              list(warnings), f"{verb}: ok=False — {refusal}")
+    return 1
 
 
 def _emit_tier_run_axi(verb, resp, project_dir, agent, warnings=()):
@@ -1143,35 +1272,44 @@ def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent,
 
 
 def cmd_unit(args):
-    """UNIT tier — targeted single class/method (RED/GREEN cycle level)."""
+    """UNIT tier — surefire's tests, `mvn clean test [-Dtest=<pattern>]`
+    (RED/GREEN cycle level). A declared `unit` profile takes the verb over."""
+    declared = _read_declared_profile(args, "unit")
+    if declared:
+        return _run_declared_profile(args, "unit", declared)
+    refused = _refuse_profile_flag(args, "unit", None)
+    if refused is not None:
+        return refused
     extra = [f"-Dtest={args.test}"] if args.test else []
     return _run_surefire_tier(args, extra, "unit")
 
 
 def cmd_module(args):
-    """MODULE tier — a whole module's surefire suite (reactor -pl)."""
+    """MODULE tier — one reactor module's surefire suite (`-pl <module>`). A
+    declared `module` profile takes the verb over; with neither, the verb has
+    nothing to run and refuses (`tier-run-undeclared`)."""
+    declared = _read_declared_profile(args, "module")
+    if declared:
+        return _run_declared_profile(args, "module", declared)
+    if not getattr(args, "module", None):
+        raise _undeclared_tier(
+            args, "module",
+            "run `module --module <m>` to run one reactor module's surefire "
+            "tests (`mvn clean test -pl <m>`), or declare a `module` profile "
+            "in pom.xml")
+    refused = _refuse_profile_flag(args, "module", None)
+    if refused is not None:
+        return refused
     return _run_surefire_tier(args, [], "module")
 
 
-def _run_failsafe_tier(args, goals, label):
-    """CR-CRU-111 §S3/AC6 — the shared body for the two cells maven's FAILSAFE
-    half serves, exactly as `_run_surefire_tier` is the shared body for the two
-    its surefire half serves.
-
-    Maven's own lifecycle separates failsafe (`*IT`) from surefire, so
-    `integration` and `e2e` are TOOLCHAIN-SPLIT cells: asking the project to
-    declare a target for either would invent a second description of a
-    distinction the build already makes. What differs between them is the
-    GOALS the caller hands in — `integration` runs the `integration-test`
-    phase, `e2e` the `verify` phase failsafe binds its IT verification to (or
-    the two failsafe goals directly, under `--failsafe-only`) — and the tier
-    each ingests under, which is the verb's own name.
-
-    Both ingest failsafe (the IT results) AND surefire (the unit tests the
-    lifecycle runs on the way to that phase) together, because both were
-    produced by this one run; on no reports at all the run is a build failure
-    and takes the compile fallback, like every other tier verb here. The
-    run's `[targets.<label>]` declaration is checked first."""
+def _run_failsafe_tier(args, goals, label, kinds=None, fresh_only=False):
+    """The shared body for the cells maven's FAILSAFE
+    half serves, exactly as `_run_surefire_tier` is the shared body for the
+    two its surefire half serves: maven handed `goals`, then the run's `kinds`
+    reports (failsafe's and surefire's by default) filed under `label`, the
+    verb's own name. `fresh_only` files only the reports written after the run
+    started. The run's `[targets.<label>]` declaration is checked first."""
     _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
@@ -1179,112 +1317,106 @@ def _run_failsafe_tier(args, goals, label):
                           f"gated {label} run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
-        return _failsafe_tier_run(args, goals, label, project_dir, identity)
-
-
-def _failsafe_tier_run(args, goals, label, project_dir, identity):
-    """`_run_failsafe_tier`'s run body, inside its gated-identity bracket."""
-    maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
-    common = _common_mvn_flags(args)
-    reports_dir = _run_reports_dir(args, project_dir)
-    _prepare_reports_dir(reports_dir)
-    cmd = (_mvn_base(maven_dir) + goals + common
-           + _reports_dir_flags(reports_dir, ("surefire", "failsafe")))
-    env = os.environ.copy()
-    # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
-    print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    module = getattr(args, "module", None)
-    # §S1 — the release this run is filed under (None: a cycle's run).
-    release = getattr(args, "release", None)
-    # The pre-flight, as `_surefire_tier_run` makes it, before maven spawns.
-    preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
-        _get, _project_key(project_dir), args.agent,
-        cycle_id=getattr(args, "cycle", None), context=_run_context())
-    narrator, run_id, run_warnings = None, None, []
-    console = _RunConsole(args, label, reports_dir)
-    # The run opens before the `try`, so a signal during its opening reaches
-    # the gated bracket; the relay starts inside it, so any exception after
-    # the relay starts finishes it.
-    if args.agent:
-        # The shared run path, as `_run_surefire_tier` walks it.
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                          context=_run_context(),
-                                          release=release,
-                                          framework=console.framework)
-    try:
-        if args.agent:
-            console.start(project_dir, args.agent, run_id)
-            narrator = _narrator(project_dir, args.agent,
-                                 _xml_total_for(maven_dir, module,
-                                                ("failsafe", "surefire"),
-                                                reports_dir),
-                                 identity, console.poster)
-            run_warnings = list(preflight_warnings) + run_warnings
-            # §S1 — the release run's note, as `_run_surefire_tier` carries it.
-            if release:
-                run_warnings = [_axi().release_run_note(release)] + run_warnings
-        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
-    except _axi().RunAbandoned as abandoned:
-        console.finish(_INTERRUPTED_FINISH_SECONDS)
-        return _axi().emit_run_abandoned(label, _project_key(project_dir),
-                                         args.agent, run_id, abandoned,
-                                         run_warnings,
-                                         post_fn=_post)
-    except BaseException:
-        console.finish(0)
-        raise
-    console.finish(_CONSOLE_FINISH_SECONDS)
-    print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
-    if not args.agent:
-        return result.returncode
-    runner_exit = _axi().runner_exit_code(result.returncode)
-    _axi().close_narration(narrator)
-    pinned_warnings = run_warnings + _claim_pinned_reports(
-        maven_dir, module, ("failsafe", "surefire"), reports_dir)
-    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, module, ("failsafe", "surefire"),
-                                         reports_dir))
-    if not dirs:
-        rc, build_output = _compile_fallback(maven_dir, project_dir,
-                                             args.agent, common, run_id=run_id,
-                                             release=release)
-        _emit_compile_fallback_axi(label, rc, build_output, project_dir,
-                                   args.agent, run_warnings)
-        # No report: the runner's exit decides, never the compile ingest's 0.
-        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
-    _warn_if_stale(dirs)
-    if _ran_nothing(result, dirs):
-        return _axi().emit_ran_nothing(
-            label, "surefire reports", result.returncode,
-            getattr(result, "stdout", None) or "", run_id, pinned_warnings,
-            post_fn=_post, project_key=_project_key(project_dir),
-            agent_id=args.agent)
-    # The subcommand name IS the tier, as it is for `unit`/`module`: a tier
-    # PARAMETER, never a literal this body asserts about a run it did not name.
-    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
-                         raw=getattr(result, "stdout", None), tier=label,
-                         context=_run_context(), run_id=run_id,
-                         release=release, runner_exit=runner_exit,
-                         framework=console.framework)
-    # The run this body measured rides a real envelope, as the board filed it.
-    _emit_tier_run_axi(label, resp, project_dir, args.agent,
-                       warnings=pinned_warnings)
-    # The exit carries the runner's verdict and the filed run's, and a
-    # refused ingest is never green.
-    return _axi().verb_exit(runner_exit, resp)
+        return _tier_run(args, goals, label, kinds or _BOTH_PLUGINS,
+                         project_dir, identity, fresh_only=fresh_only)
 
 
 def cmd_integration(args):
-    """INTEGRATION tier — maven's `integration-test` phase, which is where
-    failsafe runs the `*IT` suites the lifecycle keeps apart from surefire's.
+    """INTEGRATION tier — failsafe's integration tests alone: `mvn clean
+    verify -Dtest='!*' -Dsurefire.failIfNoSpecifiedTests=false`, so surefire
+    selects nothing, failsafe runs the `*IT` suites and its own `verify`
+    decides the verdict. Only failsafe's reports are filed. A declared
+    `integration` profile takes the verb over."""
+    declared = _read_declared_profile(args, "integration")
+    if declared:
+        return _run_declared_profile(args, "integration", declared)
+    refused = _refuse_profile_flag(args, "integration", None)
+    if refused is None:
+        refused = _refuse_test_property(args)
+    if refused is not None:
+        return refused
+    return _run_failsafe_tier(args, [*_VERIFY_PHASE, *_SKIP_SUREFIRE],
+                              "integration", _FAILSAFE)
 
-    The `verify` phase is `e2e`'s (it adds failsafe's post-run verification of
-    the assembled artifact); this cell stops at the phase that RUNS the ITs, so
-    the two failsafe cells are distinguishable in the invocation and not only
-    in the tier they report. The verdict is read from the reports either way,
-    so a failing IT is a failing run here regardless of the phase's own exit."""
-    return _run_failsafe_tier(args, ["clean", "integration-test"], "integration")
+
+def _refuse_test_property(args):
+    """An undeclared `integration` owns surefire's `-Dtest`: a
+    `--system-prop` setting `test` is refused before anything runs. Returns
+    the exit, or None when there is none."""
+    for prop in getattr(args, "system_prop", None) or []:
+        if prop.split("=", 1)[0].strip() != "test":
+            continue
+        return _refuse_tier_run(
+            "integration", _resolve_project_dir(args.project_dir),
+            getattr(args, "agent", None),
+            f"`integration` hands surefire `-Dtest=!*` so that failsafe runs "
+            f"alone, and `--system-prop {prop}` would replace that selection; "
+            f"nothing was run — select integration tests with failsafe's own "
+            f"`--system-prop it.test=<pattern>`, or run `unit --test <pattern>`")
+    return None
+
+
+#: The `--profile` ids maven resolves itself: optional (`?id`) and
+#: deactivated (`!id`) ones are passed through unchecked.
+_UNCHECKED_PROFILE_PREFIXES = ("?", "!")
+
+
+def _refuse_profile_flag(args, tier, declared):
+    """`--profile`, checked before anything runs: refused on a tier with a
+    `declared` profile, and refused for an id no pom.xml under the maven
+    directory and no `~/.m2/settings.xml` declares. Returns the exit of the
+    refusal, or None when there is none."""
+    refusal = _profile_flag_refusal(args, tier, declared)
+    if refusal is None:
+        return None
+    return _refuse_tier_run(tier, _resolve_project_dir(args.project_dir),
+                            getattr(args, "agent", None), refusal)
+
+
+def _profile_flag_refusal(args, tier, declared):
+    """What a refused `--profile` says, or None when it is accepted."""
+    requested = getattr(args, "profile", None) or []
+    if not requested:
+        return None
+    project_dir = _resolve_project_dir(args.project_dir)
+    maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    if declared:
+        return (f"`{tier}` is declared by the `{declared}` profile in "
+                f"{os.path.join(maven_dir, 'pom.xml')}, and a declared tier "
+                f"always runs its own profile, so `--profile "
+                f"{','.join(requested)}` is refused; nothing was run — drop "
+                f"--profile, or remove the `{declared}` profile")
+    known = _declared_profile_ids(maven_dir)
+    for wanted in (part.strip() for value in requested for part in value.split(",")):
+        if not wanted or wanted.startswith(_UNCHECKED_PROFILE_PREFIXES) \
+                or wanted in known:
+            continue
+        return (f"`--profile {wanted}` names a profile that no pom.xml under "
+                f"{maven_dir} and no ~/.m2/settings.xml declares; nothing was "
+                f"run — declare the `{wanted}` profile, or pass `?{wanted}` to "
+                f"let maven skip it when it is missing")
+    return None
+
+
+def _undeclared_tier(args, tier, *first_steps):
+    """The shared `tier-run-undeclared` refusal for a maven tier with nothing
+    to run, its help led by `first_steps`."""
+    refusal = _axi().TierRunUndeclared(
+        tier, _runnable_tiers(args),
+        _axi().declared_tier_surface_line(_TIER_DECLARATION_SURFACE, tier))
+    refusal.help = [*first_steps, *refusal.help]
+    return refusal
+
+
+#: The tiers maven's own lifecycle runs with no declared profile.
+_LIFECYCLE_TIERS = ("unit", "integration", "regression")
+
+
+def _runnable_tiers(args):
+    """The tier verbs that run on this project: the lifecycle's, and every
+    tier whose profile the project declares."""
+    return [tier for tier in _axi().TIER_MEANINGS
+            if tier in _LIFECYCLE_TIERS or _read_declared_profile(args, tier)]
 
 
 def cmd_compile(args):
@@ -1349,8 +1481,16 @@ def _docker_clean_check(maven_dir):
 
 
 def cmd_e2e(args):
-    """E2E tier — failsafe integration tests (*IT.java / @QuarkusIntegrationTest),
-    optionally native. No coverage. Optional docker compose lifecycle."""
+    """E2E tier — the project's declared `e2e` profile, `mvn clean verify
+    -Pe2e` (failsafe IT / @QuarkusIntegrationTest), optionally native. No
+    coverage. Optional docker compose lifecycle. With no declared profile the
+    verb has nothing to run and refuses (`tier-run-undeclared`)."""
+    declared = _read_declared_profile(args, "e2e")
+    if not declared:
+        raise _undeclared_tier(args, "e2e")
+    refused = _refuse_profile_flag(args, "e2e", declared)
+    if refused is not None:
+        return refused
     # The `[targets.e2e]` declaration is checked before any board call or
     # docker.
     _check_console_declaration(args, "e2e")
@@ -1390,11 +1530,16 @@ def cmd_e2e(args):
     e2e_rc = 1
     try:
         if args.failsafe_only:
-            # Package assumed already built (e.g. native package step done in CI).
-            goals = ["failsafe:integration-test", "failsafe:verify"]
+            # Package assumed already built (e.g. native package step done in
+            # CI): no `clean`, so only failsafe's reports this run wrote are
+            # filed.
+            e2e_rc = _run_failsafe_tier(
+                args, ["failsafe:integration-test", "failsafe:verify",
+                       f"-P{declared}"],
+                "e2e", _FAILSAFE, fresh_only=True)
         else:
-            goals = ["clean", "verify"]
-        e2e_rc = _run_failsafe_tier(args, goals, "e2e")
+            e2e_rc = _run_failsafe_tier(args, [*_VERIFY_PHASE, f"-P{declared}"],
+                                        "e2e")
     finally:
         if docker_up:
             # STEP form — the teardown must not put a second document on stdout.
@@ -1971,13 +2116,23 @@ def cmd_pre_merge_gate(args):
                 _gate_regression_args(args), verb="pre-merge-gate",
                 name_unfiled=True),
             context=_axi_context(project_dir, agent_id=args.agent),
-            crucible_url=_base_url)
+            crucible_url=_base_url,
+            # The whole-suite run activates no profile, so a declared
+            # profile's row says so rather than claiming the profile ran.
+            covered_by=_gate_covered_by)
     finally:
         # STEP form — the teardown must not put a second document on stdout.
         _docker_down(argparse.Namespace(
             project_dir=args.project_dir, compose_file=args.compose_file,
             maven_dir=args.maven_dir), project_dir)
     return reg_rc
+
+
+def _gate_covered_by(suite):
+    """What the gate's row for a declared profile says covered it: the
+    whole-suite run, which activated no profile."""
+    return (f"{_axi().whole_suite_label(_STACK)}, with no profile activated: "
+            f"the `{suite.target}` profile was not activated")
 
 
 def _gate_regression_args(args):
@@ -2391,13 +2546,14 @@ def _add_integration_tier_args(p):
     """CR-CRU-111 §S3/AC6 — `integration`'s own flags: the failsafe half of
     maven's lifecycle, without `e2e`'s packaging/docker options (this cell runs
     the ITs; it does not stand the assembled system up)."""
-    p.add_argument("--agent", help="If set, send the failsafe+surefire reports to the board (no coverage)")
+    p.add_argument("--agent", help="If set, send the failsafe reports to the board (no coverage)")
 
 
 def _add_e2e_tier_args(p):
     p.add_argument("--agent", help="If set, send the failsafe+surefire reports to the board (no coverage)")
     p.add_argument("--failsafe-only", action="store_true",
-                   help="Run only failsafe:integration-test+verify (package assumed already built, e.g. native)")
+                   help="Run only failsafe:integration-test+verify -Pe2e (package assumed already "
+                        "built, e.g. native); only the failsafe reports this run wrote are sent")
     p.add_argument("--with-docker", action="store_true", help="docker compose up/down around the run")
     p.add_argument("--compose-file", default=None, help="Compose file (rel to project root); else .env/auto-discovery")
     p.add_argument("--no-wait", action="store_true", help="docker-up without --wait")
@@ -2414,7 +2570,8 @@ def _add_declared_tier_args(p):
     """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
     siblings already take (`--agent`, maven's own flags, `--log`), so the
     instruction a refusal gives can actually be typed (AC14b)."""
-    p.add_argument("--agent", help="If set, ingest surefire (compile-fail → /api/v2/runs/compile)")
+    p.add_argument("--agent", help="If set, ingest the surefire+failsafe reports "
+                                    "(compile-fail → /api/v2/runs/compile)")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_mvn_flags(p)
@@ -2422,41 +2579,69 @@ def _add_declared_tier_args(p):
 
 
 def _read_declared_profile(args, target):
-    """§S6, maven's READ — a profile in `pom.xml` whose id IS the tier. Parsed
-    rather than pattern-matched, and namespace-agnostic (a POM's default
-    namespace decorates every tag), so what is detected is a real profile
-    declaration and never the word appearing in a comment."""
+    """§S6, maven's READ — a profile in the maven directory's `pom.xml` whose
+    id IS the tier (`_profile_ids`)."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
-    pom = os.path.join(maven_dir, "pom.xml")
+    return target if target in _profile_ids(os.path.join(maven_dir, "pom.xml")) else None
+
+
+def _profile_ids(path):
+    """Every `<profile><id>` declared in the POM or `settings.xml` at `path`;
+    empty when there is no such file. Parsed rather than pattern-matched, and
+    namespace-agnostic (a POM's default namespace decorates every tag), so
+    what is read is a real profile declaration and never the word appearing
+    in a comment."""
     try:
-        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the project's own pom.xml from the working tree; the clients are stdlib-only
-        root = ET.parse(pom).getroot()  # noqa: S314
+        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the project's own pom.xml or the user's settings.xml; the clients are stdlib-only
+        root = ET.parse(path).getroot()  # noqa: S314
     except OSError:
-        return None
+        return set()
     except ET.ParseError as error:
-        print(f"[crucible] WARN: {pom} does not parse ({error}) — no declared "
-              f"tier profile can be read from it", file=sys.stderr)
-        return None
+        print(f"[crucible] WARN: {path} does not parse ({error}) — no profile "
+              f"can be read from it", file=sys.stderr)
+        return set()
 
     def local(tag):
         return tag.rsplit("}", 1)[-1]
 
-    for element in root.iter():
-        if local(element.tag) != "profile":
-            continue
-        for child in element:
-            if local(child.tag) == "id" and (child.text or "").strip() == target:
-                return target
-    return None
+    return {(child.text or "").strip()
+            for element in root.iter() if local(element.tag) == "profile"
+            for child in element if local(child.tag) == "id"}
+
+
+def _declared_profile_ids(maven_dir):
+    """Every profile id a `--profile` may name: one declared in any pom.xml
+    under `maven_dir` (nothing under a `target` directory counts), or in the
+    user's `~/.m2/settings.xml`. A parent POM outside the project is not
+    read."""
+    ids = set()
+    for root, dirs, files in os.walk(maven_dir):
+        dirs[:] = sorted(d for d in dirs if d != "target")
+        if "pom.xml" in files:
+            ids |= _profile_ids(os.path.join(root, "pom.xml"))
+    return ids | _profile_ids(os.path.join(os.path.expanduser("~"), ".m2",
+                                           "settings.xml"))
 
 
 def _run_declared_profile(args, tier, profile):
-    """§S6, maven's RUN — maven under that profile, ingested under the tier of
-    the VERB that asked for it. The body is the one maven's own surefire cells
-    already run: a declared profile binds the executions, and which they are is
-    the project's decision, never this client's."""
-    return _run_surefire_tier(args, [f"-P{profile}"], tier)
+    """§S5/§S6, maven's RUN — maven under the tier's declared profile, filed
+    under the tier of the VERB that asked for it: `clean test -P<tier>` for
+    `unit` and `module`, `clean verify -P<tier>` for the rest. The profile
+    decides what runs, so every surefire and failsafe report the run wrote is
+    filed, and a `--profile` beside it is refused."""
+    refused = _refuse_profile_flag(args, tier, profile)
+    if refused is not None:
+        return refused
+    if tier in _SUREFIRE_PHASE_TIERS:
+        extra = [f"-Dtest={args.test}"] if getattr(args, "test", None) else []
+        return _run_surefire_tier(args, [*extra, f"-P{profile}"], tier,
+                                  _BOTH_PLUGINS)
+    return _run_failsafe_tier(args, [*_VERIFY_PHASE, f"-P{profile}"], tier)
+
+
+#: The tiers whose declared profile runs maven's `test` phase.
+_SUREFIRE_PHASE_TIERS = ("unit", "module")
 
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
@@ -2492,8 +2677,9 @@ def _add_regression_tier_args(p):
 _CLI_DESCRIPTION = (
     "Maven + Quarkus Crucible CLI — one entry point for the orchestrator and for the\n"
     "java RED/GREEN/FIX/VERIFY agent lifecycle, and for running Maven test tiers\n"
-    "(surefire unit, module reactor, failsafe e2e, full regression) with the result\n"
-    "ingested to Crucible. Regression coverage is opt-in: --coverage adds JaCoCo.\n"
+    "(surefire unit, module reactor, failsafe integration, declared e2e and bdd\n"
+    "profiles, full regression) with the result ingested to Crucible. Regression\n"
+    "coverage is opt-in: --coverage adds JaCoCo.\n"
     "\n"
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
@@ -2586,25 +2772,34 @@ def main():
         # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
         dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
-                 "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
+                 "Runs `mvn clean test` (with `-Dtest=<pattern>` only under "
+                 "--test) and ingests surefire; a declared `unit` profile "
+                 "runs `mvn clean test -Punit` instead.",
                  (_add_unit_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
                   _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              module=tier_verb(
                  cmd_module,
-                 "Runs `mvn clean test [-pl <module> -am]` — maven's own "
-                 "reactor scoping — and ingests surefire.",
+                 "Runs `mvn clean test -pl <module> [-am]` — maven's own "
+                 "reactor scoping — and ingests surefire; a declared "
+                 "`module` profile runs `mvn clean test -Pmodule` instead. "
+                 "With neither --module nor the profile it refuses.",
                  (_add_module_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
                   _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              integration=tier_verb(
                  cmd_integration,
-                 "Runs `mvn clean integration-test` — the failsafe half of "
-                 "maven's own lifecycle — and ingests failsafe+surefire.",
+                 "Runs `mvn clean verify -Dtest='!*' "
+                 "-Dsurefire.failIfNoSpecifiedTests=false` — failsafe's "
+                 "integration tests alone — and ingests failsafe; a declared "
+                 "`integration` profile runs `mvn clean verify -Pintegration` "
+                 "instead.",
                  (_add_integration_tier_args, _add_gate_cycle_arg,
                   _add_run_release_arg, _add_mvn_flags, _add_log_arg,
                   _add_reports_arg)),
              e2e=tier_verb(
                  cmd_e2e,
-                 "Runs failsafe IT / @QuarkusIntegrationTest. No coverage.",
+                 "Runs the declared `e2e` profile, `mvn clean verify -Pe2e` "
+                 "(failsafe IT / @QuarkusIntegrationTest), and refuses with "
+                 "none. No coverage.",
                  (_add_e2e_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
                   _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              regression=tier_verb(
@@ -2615,6 +2810,13 @@ def main():
                   _add_reports_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_args,))
+    # `bdd` is maven's one declared-only cell with no verb of its own: its
+    # help says what its declaration runs.
+    sub.choices["bdd"].description = (
+        "Runs the project's declared `bdd` profile, `mvn clean verify -Pbdd`, "
+        "and files every surefire and failsafe report the run wrote under "
+        "`bdd`. With no `bdd` profile in pom.xml it refuses "
+        "(tier-run-undeclared).")
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
     co.add_argument("--agent", help="If set, ingest the build output as a compile result")
