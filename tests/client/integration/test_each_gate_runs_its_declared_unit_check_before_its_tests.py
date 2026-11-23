@@ -461,6 +461,11 @@ class _SharedParsingCases(_UnitCheckDrive):
         self.assertIn(UNIT_CHECK, self.help_and_detail(axi),
                       f"the command's basename names the stage; {why}")
         self.assertNotIn(DECLARED_NAME, self.help_and_detail(axi), why)
+        # The basename is a substring of the full path, so the line holding
+        # it must not hold the path the command was declared by.
+        self.assertFalse(any(str(path) in str(step) for step in axi.get("help") or []),
+                         f"the stage is named by the basename, never the full "
+                         f"path; {why}")
 
 
 # ── python ──────────────────────────────────────────────────────────────────
