@@ -352,12 +352,24 @@ class EachStateOnEveryVerbTest(_Streamed):
                 self.assertGreaterEqual(len(named), 1, f"a warning names the untaken list; {where}")
                 self.assertLessEqual(len(named), 1, where)
 
-    def test_a_list_with_no_match_and_a_stream_with_no_result_ran_nothing(self):
+    def test_a_list_with_no_match_refuses_a_split_tier_and_otherwise_ran_nothing(self):
+        """A split tier (`unit`, `integration`) refuses an empty selection
+        before any run opens; every other verb opens its run, posts the empty
+        list and aborts the run that ran nothing."""
         for label in VERBS:
             with self.subTest(verb=label):
                 p = self.project()
                 result = p.drive(label, FAKE_TOTAL="0")
                 where = f"{label}: {diagnostics(result)}"
+                if label in ("unit", "integration"):
+                    axi = envelope(result.stdout) or {}
+                    self.assertIs(axi.get("ok"), False, where)
+                    self.assertEqual(axi.get("code"), "tier-selection-empty", where)
+                    self.assertEqual(p.starts(), [], f"no run is opened; {where}")
+                    self.assertEqual(p.board.list_posts(), [], f"no list is posted; {where}")
+                    self.assertEqual(p.board.aborts(), [], f"nothing is aborted; {where}")
+                    self.assertEqual(p.compiles(), [], f"no compile failure; {where}")
+                    continue
                 self.assertEqual(len(p.board.list_posts()), 1, f"the empty list is posted; {where}")
                 self.assertEqual([path for path, _b in p.board.aborts()],
                                  [f"/api/v2/runs/{RUN_ID}/abort"],
@@ -546,16 +558,24 @@ class EachStateOnEveryVerbTest(_Streamed):
                                   json.dumps(axi, ensure_ascii=False),
                                   f"the envelope names the refused start; {where}")
 
-    def test_a_run_without_an_agent_posts_nothing_lists_nothing_and_runs_without_the_stream(self):
+    def test_a_run_without_an_agent_posts_nothing_lists_only_a_split_tier_and_runs_without_the_stream(self):
+        """A split tier (`unit`, `integration`) lists its selection once, to
+        check it is not empty; every other verb lists nothing."""
         for label in AGENT_OPTIONAL_VERBS:
             with self.subTest(verb=label):
                 p = self.project()
                 result = p.drive(label, agent=None, FAKE_TOTAL="2")
                 where = f"{label}: calls={[c['argv'] for c in p.calls()]!r} {diagnostics(result)}"
                 self.assertEqual(p.posts(), [], f"nothing is posted; {where}")
-                self.assertEqual(p.calls_of("nextest", "list"), [], f"nothing is listed; {where}")
+                lists = p.calls_of("nextest", "list")
                 runs = p.calls_of("nextest", "run")
                 self.assertEqual(len(runs), 1, where)
+                if label in ("unit", "integration"):
+                    self.assertEqual(len(lists), 1, f"one list; {where}")
+                    self.assertEqual(selection(lists[0]["argv"]), selection(runs[0]["argv"]),
+                                     f"the list carries the run's selection; {where}")
+                else:
+                    self.assertEqual(lists, [], f"nothing is listed; {where}")
                 self.assertNotIn("--message-format", runs[0]["argv"], where)
                 self.assertIn("PASS [", result.stdout + result.stderr,
                               f"nextest's human output reaches the terminal; {where}")
