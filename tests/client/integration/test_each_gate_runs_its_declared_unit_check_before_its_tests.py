@@ -441,6 +441,8 @@ class _SharedParsingCases(_UnitCheckDrive):
         self.assertIsInstance(error, str, f"the stop is an error; {why}")
         self.assertIn(repr(str(missing)), str(error),
                       f"the error names the command not found; {why}")
+        self.assertIn(f"no executable at {missing}", str(error),
+                      f"the error keeps why the command was not found; {why}")
 
     def test_a_declared_name_names_the_stage_in_the_abort(self):
         path = self.failing_unit_check()
