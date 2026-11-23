@@ -447,8 +447,8 @@ def run_unit_check_command(spec, run_dir):
     try:
         executable = resolve_lint_command(word, run_dir, os.environ.get("PATH"))
     except LintRefused as refusal:
-        raise LintRefused(f"the unit-check command {word!r} was not found"
-                          ) from refusal
+        raise LintRefused(f"the unit-check command {word!r} was not found "
+                          f"-- {refusal}") from refusal
     try:
         result = subprocess.run(
             [executable, *spec["command"][1:]], cwd=run_dir,
