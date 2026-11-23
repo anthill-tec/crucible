@@ -33,8 +33,8 @@ cargo; and what the board holds, from the board itself.
     and pending counts, every listed test run despite the failures;
   - the list is posted before the first stream batch, and the open run's
     total is the list's matching tests, under the profile's `default-filter`,
-    with `--features`, for a crate selection, an `-E` filter, `--lib`,
-    `--tests` and `--test <name>`;
+    with `--features`, for a crate selection, an `-E` filter, the `unit`
+    and `integration` kind filters and `--test <name>`;
   - a coverage run's run step compiles nothing and files its lcov although a
     test failed; a plain run after it compiles its crates again, and no
     `.profraw` lies outside the coverage target directory;
@@ -106,10 +106,13 @@ RUNS = (
      {"matches": 3, "passed": 3, "failed": 0, "pending": 0}),
     ("test -E", ("test", "--crate", "nx-targets", "--filter", "test(/doubles/)"),
      {"matches": 3, "passed": 2, "failed": 1, "pending": 0}),
-    ("unit --lib", ("unit",),
-     {"matches": 7, "passed": 5, "failed": 2, "pending": 2}),
-    ("integration --tests", ("integration", "--crate", "nxpass"),
-     {"matches": 3, "passed": 3, "failed": 0, "pending": 0}),
+    # `unit` selects the lib, bin and proc-macro kinds: `nx-targets`' bin
+    # test `tool_starts` runs beside the lib tests.
+    ("unit", ("unit",),
+     {"matches": 8, "passed": 6, "failed": 2, "pending": 2}),
+    # `integration` selects the test kind: `nxpass`' lib tests stay out.
+    ("integration --crate", ("integration", "--crate", "nxpass"),
+     {"matches": 1, "passed": 1, "failed": 0, "pending": 0}),
     ("integration --test", ("integration", "--test", "it"),
      {"matches": 2, "passed": 2, "failed": 0, "pending": 0}),
 )
@@ -296,6 +299,7 @@ def setUpModule():
     _MODULE["board"] = board
     proxy = board.proxy
     _MODULE["proxy"] = proxy
+    assert proxy is not None, "the board was started with its proxy"
     install_project(project, proxy.url, board.key, board.name)
     shim_dir = os.path.join(scratch, "shim")
     bin_dir = os.path.join(scratch, "bin")
