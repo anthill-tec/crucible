@@ -117,11 +117,11 @@ def _wire_index(posts, predicate):
     return None
 
 
-# The poll cadence `stream_axi_ladder` uses, read off the shared module
-# itself rather than hard-coded here — the dispatch's own instruction (use
-# the client's own cadence constants, not a wall-clock guess).
+# The poll cadence `stream_axi_ladder` uses, read off the client's own
+# settings instance rather than hard-coded here — the dispatch's own
+# instruction (use the client's own cadence, not a wall-clock guess).
 def _cadence(module):
-    return module._axi()._GATE_POLL_CADENCE_S
+    return module._axi().SETTINGS.gate_poll_cadence_seconds
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -244,9 +244,13 @@ def _post(path, payload, timeout=None):
     return _request("POST", path, payload, timeout=timeout)
 
 
-def _get(path, timeout=10):
+def _get(path, timeout=None):
     # §S1 — the read path (status/plans) is bounded by a SHORT hook-safe timeout
     # so an unreachable/slow server can't hang a session-start hook forever.
+    # The bound is the `read_timeout_seconds` setting, read at each call; an
+    # explicit `timeout` wins.
+    if timeout is None:
+        timeout = _axi().SETTINGS.read_timeout_seconds
     return _request("GET", path, timeout=timeout)
 
 

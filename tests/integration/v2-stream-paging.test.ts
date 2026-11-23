@@ -308,7 +308,10 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
     test(
       "a comment keep-alive line (starting ':') arrives within 17s of silence",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        // This board's keep-alive is short (its own option, at the safe
+        // minimum), so the frame deadline is one second, not the production
+        // 15 s interval plus slack.
+        handle = startServer({ port: 0, dbPath: ":memory:", keepAliveMs: 200 });
 
         const res = await fetch(`http://localhost:${handle.server.port}/api/stream`);
         const reader = res.body!.getReader();
@@ -316,13 +319,13 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
         await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
 
         // No ingest/heartbeat activity here — wait purely for the periodic keep-alive.
-        const keepAlive = await nextFrameMatching(sse, (f) => f.isComment, 17000);
+        const keepAlive = await nextFrameMatching(sse, (f) => f.isComment, 1000);
         expect(keepAlive.isComment).toBe(true);
         expect(keepAlive.raw.startsWith(":")).toBe(true);
 
         await reader.cancel();
       },
-      20000,
+      5000,
     );
 
     test("disconnect (AbortController.abort()) unsubscribes: store.listenerCount() returns to its pre-connection value; a subsequent ingest does not throw server-side", async () => {

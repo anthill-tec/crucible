@@ -1,6 +1,6 @@
 # CR-CRU-272: the board UI and the clients take their intervals as settings
 
-**Status:** PENDING. Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 and §7
+**Status:** COMPLETED (2026-11-23). Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 and §7
 slice 13). User ruling: it follows the cull and comes ahead of CR-CRU-267.
 
 It was revised the same day three times:
@@ -187,3 +187,59 @@ These waits also make the suites sensitive to machine load.
 - **Timers no test waits on:** the locate-blink timeouts, already intercepted in tests, and `LIVE_FRAME_MS`.
 - **Tests bound by a real toolchain:** `test_client_unit_tier_wall_vs_cpu`, the playwright reporters, and the e2e
   tier.
+
+## Close-out
+
+Closed 2026-11-23. Board plan 272 ran four cycles:
+
+| Cycle | Work |
+|---|---|
+| 1009 | RED+GREEN, S1 |
+| 1010 | RED+GREEN, S2 |
+| 1011 | VERIFY |
+| 1012 | FIX |
+
+**S1: the UI and the server.**
+- **RED (`c30fa435`):**
+  - a shared UI mount helper, `tests/helpers/ui-mount.ts`, with per-mount `intervals` and a condition-based
+    `waitForPollTick`;
+  - four AC1 guards;
+  - 30 converted tests.
+- **GREEN (`4792b481`):** `CrucibleLogic.intervals`, read at the six `app.js` sites, and `keepAliveMs` on
+  `CreateBoardOpts` and `StartServerOpts`.
+- **A ruling on AC1:** production arms the cycle and run ticks before the poll and the watchdog. The AC1 guard asserts
+  each timer's value, not their order, so AC1's "then" is not a required order.
+
+**S2: the clients.**
+- **RED (`641a98e1`):**
+  - the AC1 pins;
+  - the settings-honoured unit tests;
+  - the launcher, `tests/client/short_cadence_launcher.py`;
+  - the AC3 conversions, including both R3 joiners: the go tick module and `plans-read-timeout-envelope`.
+- **RED amendment (`5536c89d`):** removed the launcher's own tests and the shape classes, under the user's rule that
+  a test's subject is production code.
+- **GREEN (`5f8d924d`):** one mutable `SETTINGS` instance, with `relay_seconds`, `narrator_seconds`,
+  `gate_poll_cadence_seconds`, `gate_poll_tick_seconds` and `read_timeout_seconds`. It is re-exported by identity and
+  read late. `RELAY_SECONDS`, `_GATE_POLL_CADENCE_S` and `_GATE_POLL_TICK_S` were removed.
+- **A ruling:** the migrated relay unit's `FAST_TICK = 0.02` stays. S3e binds the AC3 conversions.
+
+**VERIFY 1011: CHANGES.**
+- **Production met every AC.**
+- **B1–B5:** older tests that read source, an AST, or their own checkers, in the modules this CR touched.
+- **S1:** flake slack.
+
+**FIX 1012 (`cdf267f1..1abbe125`):**
+- deleted the B1–B5 tests;
+- widened the positive condition waits (`RELAY_WAIT` 5 s, the ladder's 0.6 s/1.8 s, the gate identity's 0.9 s/2.4 s);
+- retitled the clock-moving tests.
+
+**Pre-merge gate, cycle 1012:** 13,301 passed and 0 failed, in 1,342.7 s. CR-273's gate took 1,814.6 s, so this is
+−472 s.
+
+| Suite | Results | Time |
+|---|---|---|
+| bun | 5,086 | — |
+| python unit | 2,625 | — |
+| python integration | 5,590 | 1,067.5 s at GREEN, against 1,276 s |
+
+**Left for later:** the older pyright error in `arduino-crucible.py`, where `lcov` is possibly unbound (`4613a04c`).

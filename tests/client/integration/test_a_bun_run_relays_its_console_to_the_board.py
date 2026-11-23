@@ -75,6 +75,7 @@ from tests.client.live_run_harness import (
 )
 from tests.client import client_script
 from tests.client.a_bun_run_relays_its_console_to_the_board_helpers import ConsoleBoard, VIEW_CODEC
+from tests.client.client_cadence_settings import SHORT_RELAY, launcher_command
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BUN_SCRIPT = client_script("bun-crucible.py")
@@ -95,11 +96,17 @@ STALE = "STALE_CONSOLE_FROM_A_PREVIOUS_RUN"
 REFUSAL = "STREAM_REFUSED_BY_THE_FIXTURE_BOARD"
 PLANTED = "planted relay failure"
 
-RUN_TIMEOUT = 120
+# Every drive runs the client through the test-only launcher with the relay
+# and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth
+# of production's 2 s; the fixture's own durations are scaled with them.
+RUN_TIMEOUT = 20
 MARKER_WAIT = 20
-# The relay sends every RELAY_SECONDS (2 s): a live relay's first batch lands
-# well inside this.
-RELAY_WAIT = 8
+# The relay sends every 0.2 s: a live relay's first batch lands well inside
+# this, and a relay that never wakes leaves the drive uncued when it passes.
+RELAY_WAIT = 5.0
+# The gap between the runner's later result lines: 0.1 s at production's
+# 2 s relay tick, scaled with it.
+AFTER_DELAY = "0.01"
 
 _SCRUBBED = ("BUN_CRUCIBLE_NO_LIFECYCLE", "BUN_CRUCIBLE_PACKAGE_DIR",
              "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_BUN", "CRUCIBLE_AGENT_ID",
@@ -322,9 +329,10 @@ class ConsoleRelayCase(unittest.TestCase):
     # ── drive ──────────────────────────────────────────────────────────────
 
     def command(self, verb, *flags, agent=True):
-        cmd = [sys.executable, str(BUN_SCRIPT), verb, *flags,
-               "--bun", str(self.fake), "--project-dir", str(self.project),
-               "--package-dir", str(self.project), "--reports", str(self.reports)]
+        cmd = launcher_command(BUN_SCRIPT, verb, *flags,
+                               "--bun", str(self.fake), "--project-dir", str(self.project),
+                               "--package-dir", str(self.project), "--reports", str(self.reports),
+                               **SHORT_RELAY)
         return cmd + (["--agent", AGENT] if agent else [])
 
     def environment(self, **fake):
@@ -353,7 +361,8 @@ class ConsoleRelayCase(unittest.TestCase):
             proc = subprocess.Popen(cmd, cwd=str(self.project), env=env,
                                     stdout=subprocess.PIPE, stderr=err, text=True)
             try:
-                if _wait_until(lambda: MARKER in _read(stderr_path), MARKER_WAIT):
+                if _wait_until(lambda: MARKER in _read(stderr_path) or proc.poll() is not None,
+                               MARKER_WAIT) and MARKER in _read(stderr_path):
                     cued = _wait_until(lambda: release_when(self.board), RELAY_WAIT)
                     if interrupt:
                         proc.send_signal(signal.SIGINT)
@@ -748,7 +757,7 @@ class ARelayStoppedMidRunGivesTheTicksBackTest(ConsoleRelayCase):
         self.declare_tests("relay.test.ts", self.BEFORE + self.AFTER)
         return self.drive("test", release_when=_a_stream_post_landed,
                           FAKE_BEFORE=self.BEFORE, FAKE_AFTER=self.AFTER,
-                          FAKE_AFTER_DELAY="0.1")
+                          FAKE_AFTER_DELAY=AFTER_DELAY)
 
     def test_a_relay_cut_by_a_413_gives_the_ticks_back_and_files_the_junit_record(self):
         drive = self.run_stopped(ConsoleBoard(stream_limit=8))
@@ -835,7 +844,9 @@ class ARelayRetryingA5xxGivesTheTicksBackTest(ConsoleRelayCase):
                                     stdout=subprocess.PIPE, stderr=err, text=True)
             try:
                 for _case, marker, release, step in plan:
-                    parked = _wait_until(lambda m=marker: m in said(), MARKER_WAIT)
+                    parked = _wait_until(
+                        lambda m=marker: m in said() or proc.poll() is not None,
+                        MARKER_WAIT) and marker in said()
                     cued = cued and parked and bool(step(said))
                     release.write_text("go", encoding="utf-8")
                 stdout, _ = proc.communicate(timeout=RUN_TIMEOUT)
@@ -879,7 +890,7 @@ class ARelayRetryingA5xxGivesTheTicksBackTest(ConsoleRelayCase):
         self.declare_tests("relay.test.ts", total)
         drive = self.drive_through_gates([(self.BEFORE + 1, self.heard_a_503)],
                                          FAKE_BEFORE=self.BEFORE, FAKE_AFTER=after,
-                                         FAKE_AFTER_DELAY="0.1")
+                                         FAKE_AFTER_DELAY=AFTER_DELAY)
         self.assertTrue(drive.cued, f"the relay heard a 503 while the runner was parked; "
                                     f"{drive.diag()}")
         self.assertEqual(drive.returncode, 0, drive.diag())
@@ -915,7 +926,7 @@ class ARelayRetryingA5xxGivesTheTicksBackTest(ConsoleRelayCase):
             [(self.BEFORE + 1, self.heard_a_503), (resume, start_holding),
              (resume, heard_the_board_hold)],
             FAKE_BEFORE=self.BEFORE, FAKE_AFTER=self.MIDDLE + self.AFTER,
-            FAKE_AFTER_DELAY="0.1")
+            FAKE_AFTER_DELAY=AFTER_DELAY)
         self.assertTrue(drive.cued, f"the board failed, then held, while the runner was parked; "
                                     f"answered={board.answered!r}; {drive.diag()}")
         self.assertEqual(drive.returncode, 0, drive.diag())

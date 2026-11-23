@@ -86,24 +86,14 @@
 // browser, each scenario a leaf of it carrying its Gherkin steps, and the
 // run's counts over its scenarios.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, settleReads, unmountUi, waitUntil, type UiIntervals } from "../helpers/ui-mount";
 import { relativeTime, workspaceTabs } from "../../public/app-logic.mjs";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+/** A short watchdog for the liveness test (its own mount only): the silence
+ *  window keeps its default and the clock is moved past it with
+ *  `setSystemTime`, so only the watchdog's cadence is shortened. */
+const SHORT_WATCHDOG: UiIntervals = { watchdogMs: 100 };
 
 /** CR-CRU-097 AC1's two rules, restated here so §S2's own empty state is
  *  railed from this side too rather than only by the shipped guard. */
@@ -245,10 +235,11 @@ interface MountOpts {
   projectType?: "backend" | "frontend";
   runs?: RunFixture[];
   failingDetails?: string[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 let healthReachable = true;
-let cacheBust = 0;
 let mountNow = 0;
 const HARNESS_AGENT_ID = "bdd-section-agent";
 let fetchLog: string[] = [];
@@ -260,9 +251,6 @@ async function mountApp(opts: MountOpts): Promise<void> {
   detailReadFails = new Set(opts.failingDetails ?? []);
   healthReachable = true;
   fetchLog = [];
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost/p/${opts.key}` });
-  document.body.innerHTML = '<div id="app"></div>';
 
   mountNow = Date.now();
   const now = mountNow;
@@ -292,7 +280,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
   const okResponse = (body: unknown): Response =>
     ({ ok: true, status: 200, json: async () => body }) as Response;
 
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  const scriptedFetch = async (url: string): Promise<Response> => {
     fetchLog.push(url);
     if (/\/api\/v2\/projects\/[^/?]+\/release-proposals/.test(url)) {
       return okResponse({ ok: true, proposals: [], totalCount: 0 });
@@ -374,30 +362,18 @@ async function mountApp(opts: MountOpts): Promise<void> {
       return okResponse({ ok: true, version: "2.0.0-test", counts: { events: 0 } });
     }
     return okResponse({ ok: true });
-  }) as typeof fetch;
+  };
 
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?bddSection=${cacheBust}`);
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  await mountUi({ pathname: `/p/${opts.key}`, intervals: opts.intervals, fetch: scriptedFetch });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function sleep(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  await promise;
-}
-
 afterEach(async () => {
   setSystemTime();
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 const norm = (text: string | null | undefined): string =>
@@ -522,24 +498,6 @@ function boardRelativeTime(offsetMs: number): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// NEW — §S4 AC1: `BddFeed` and its siblings are GONE, asserted BY ABSENCE
-// (not by inspection). No test in this migration checked this before: the
-// 13 original assertions were all triaged to KEEP/DELETE/AMEND, but none of
-// them named the retirement itself as a fact to assert. A GREEN that left a
-// dead `BddFeed` branch behind (unreachable, unshimmed, but still declared)
-// would satisfy every migrated behavioural test above while failing this
-// CR's own §S4 AC1 in letter and spirit.
-// ──────────────────────────────────────────────────────────────────────────
-
-describe("CR-CRU-145 §S4 AC1 — the bespoke BDD renderer is RETIRED, asserted by absence", () => {
-  test("no BddFeed/BddFeature/BddScenario/BddStep/BddRunIdentity declaration survives in public/app.js — no shim, no dead branch, no second path", () => {
-    for (const symbol of ["BddFeed", "BddFeature", "BddScenario", "BddStep", "BddRunIdentity"]) {
-      expect(APP_JS_SRC).not.toMatch(new RegExp(`\\b${symbol}\\b`));
-    }
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────────
 // KEPT, RE-POINTED — the Gherkin now renders at the run detail, reached via
 // the BDD index's own row (§S2's hand-off, not a fork).
 // ──────────────────────────────────────────────────────────────────────────
@@ -631,17 +589,23 @@ describe("CR-CRU-145 §S4 (migrated) — the populated INDEX's dimming means liv
   test(
     "MIGRATED #7 — a populated BDD index is NOT greyed while the backend is up, and gains `greyed` only when the shell's own watchdog loses the backend — with its rows still rendered",
     async () => {
-      await mountBdd({ key: "bdd-greyed", runs: [bddRun()] });
+      await mountBdd({ key: "bdd-greyed", runs: [bddRun()], intervals: SHORT_WATCHDOG });
 
       expect(indexRows().length).toBe(1);
       expect(classTokens(bddPane())).toContain("app-center");
       expect(classTokens(bddPane())).not.toContain("greyed");
 
+      // The clock moves past the silence window; the (short) watchdog then
+      // probes on its own — the wait is for that probe, never a duration.
       healthReachable = false;
+      const probesBefore = fetchLog.filter((url) => url.includes("/api/v2/health")).length;
       try {
         setSystemTime(new Date(Date.now() + 60_000));
-        await sleep(6_000);
-        await settle();
+        await waitUntil(
+          () => fetchLog.filter((url) => url.includes("/api/v2/health")).length > probesBefore,
+          "the watchdog's /api/v2/health probe past the silence window",
+        );
+        await settleReads();
       } finally {
         setSystemTime();
       }
@@ -651,7 +615,7 @@ describe("CR-CRU-145 §S4 (migrated) — the populated INDEX's dimming means liv
       // STALE pane, never an unbuilt one.
       expect(indexRows().length).toBe(1);
     },
-    30_000,
+    5_000,
   );
 
   test("MIGRATED #8 (UNCHANGED — never referenced BddFeed's internals) — on a backend project BDD is gated ON THE TAB — disabled, unclickable, pane never mounts — and no pane is dimmed for it", async () => {

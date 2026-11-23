@@ -85,13 +85,21 @@ class _Drive:
 
 
 def _drive_all(client_key, client_path, argv_tail, live_snapshot, final_snapshot,
-               run_seconds):
+               run_seconds, settings=None):
     """Drive one client's real `main()` against the fake `no-mistakes` above,
     recording EVERY `POST` the drive makes — gates, heartbeats, registers,
     unregisters alike — in wire order. Mirrors the sibling fleet harness's
-    own `_drive`, generalised past the gates-only filter that file applies."""
+    own `_drive`, generalised past the gates-only filter that file applies.
+
+    `settings`, when given, maps client setting names to the values the
+    drive sets on the loaded client's own settings instance
+    (`module._axi().SETTINGS`) before it runs, restoring each after it."""
     cache_key = f"gate_identity_{client_key}_{next(_COUNTER)}"
     module = _load_module(client_path, cache_key)
+    instance = module._axi().SETTINGS if settings else None
+    saved_settings = {name: getattr(instance, name) for name in (settings or {})}
+    for name, value in (settings or {}).items():
+        setattr(instance, name, value)
     tmpdir = tempfile.mkdtemp(prefix="gate-identity-")
     fake_bin_dir = tempfile.mkdtemp(prefix="gate-identity-bin-")
     state_dir = tempfile.mkdtemp(prefix="gate-identity-state-")
@@ -136,6 +144,8 @@ def _drive_all(client_key, client_path, argv_tail, live_snapshot, final_snapshot
             argv = argv_tail + ["--project-dir", tmpdir]
             code, out, err = _run_main(module, argv)
     finally:
+        for name, value in saved_settings.items():
+            setattr(instance, name, value)
         os.environ["PATH"] = saved_path
         for k in ("GATE_FLEET_FAKE_LIVE_FILE", "GATE_FLEET_FAKE_FINAL_FILE",
                   "GATE_FLEET_FAKE_RUN_SECONDS"):

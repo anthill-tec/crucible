@@ -59,23 +59,8 @@
 //     them; these tests are what makes a later mount-local regression fail
 //     loudly, and they are the ACs CR-CRU-079 will build on.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
-
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -240,6 +225,8 @@ interface MountOpts {
    *  from AC19's empty board. */
   proposalsStatus?: number;
   layout?: Partial<StripLayout>;
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 /** The two independently measured quantities the window size comes from. */
@@ -254,7 +241,6 @@ const TERMINAL_W = 60;
 const TRACK_LEFT = TERMINAL_W + TAG_SLOT;
 
 let layout: StripLayout = { ...DEFAULT_LAYOUT };
-let cacheBust = 0;
 /** Every URL the app fetched since the mount — the AC31 proof that the poll
  *  tick really re-read all three slices rather than one. */
 let fetched: string[] = [];
@@ -318,10 +304,6 @@ async function mountApp(opts: MountOpts): Promise<void> {
   const key = opts.key ?? "selection-key";
   layout = { ...DEFAULT_LAYOUT, ...(opts.layout ?? {}) };
   fetched = [];
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost/p/${key}/roadmap` });
-  document.body.innerHTML = '<div id="app"></div>';
-  installLayout();
 
   const okResponse = (body: unknown): Response =>
     // Unchecked cast, deliberate: the app consumes exactly `.ok`/`.status`/
@@ -363,22 +345,17 @@ async function mountApp(opts: MountOpts): Promise<void> {
     }
     throw new Error(`roadmap-selection-durability.test.ts mountApp: unexpected fetch url ${url}`);
   };
-  const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch };
-  scriptedGlobals.fetch = scriptedFetch as unknown as typeof fetch;
 
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  // Dynamic import is REQUIRED, not a style choice: the specifier carries a
-  // per-mount cache-bust query so each test re-evaluates app-logic.mjs into a
-  // fresh happy-dom global (house harness pattern, shared with the two
-  // sibling roadmap suites).
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?roadmapSelectionDurability=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  // The shared UI mount re-evaluates app-logic.mjs per mount (a cache-busted
+  // import into the fresh happy-dom global); the strip's box model is this
+  // file's own setup, installed once the window exists and before the shell
+  // evaluates.
+  await mountUi({
+    pathname: `/p/${key}/roadmap`,
+    intervals: opts.intervals,
+    fetch: scriptedFetch,
+    beforeBoot: installLayout,
+  });
 }
 
 /** Real timers, deliberately (the rule's stated exception): the SUBJECT is the
@@ -390,24 +367,16 @@ async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-/** `startPolling` in public/app.js — `startPolling()` is
- *  `setInterval(refetch, 5000)`, and happy-dom has no EventSource, so this is
- *  the reachable half of the very refetch path an SSE `onmessage` frame
- *  calls. */
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 20_000;
-
-async function waitForPollTick(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, POLL_WAIT_MS);
-  await promise;
-  await settle();
-}
+/** `startPolling` in public/app.js arms the poll fallback (happy-dom has no
+ *  EventSource), the reachable half of the very refetch path an SSE
+ *  `onmessage` frame calls. A poll test mounts with a SHORT poll (its own
+ *  mount only) and waits for that tick's read through the shared
+ *  `waitForPollTick` (1 s deadline); the bound is sized to the short tick. */
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 afterEach(async () => {
   layout = { ...DEFAULT_LAYOUT };
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 // ── DOM readers ────────────────────────────────────────────────────────────
@@ -575,6 +544,7 @@ describe("CR-CRU-078 §S7/AC17 — one selection, two renderings: row ⇄ node",
 
   test("a poll tick that replaces the queue leaves the highlight where the user put it — the selection is not render-tree state either", async () => {
     const opts: MountOpts = {
+      intervals: SHORT_POLL,
       key: "selection-poll-key",
       releases: [SHIPPED_010],
       proposals: [PROPOSED_020],
@@ -678,6 +648,7 @@ describe("CR-CRU-078 §S8/AC31 — the focused release and the page window survi
     "with 0.1.9 focused and the strip paged off its landing window, a poll tick that replaces state.queue, state.plans AND state.releases leaves both exactly as the user left them",
     async () => {
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         key: "durable-poll-key",
         releases: durableLedger(),
         proposals: [PROPOSED_020],

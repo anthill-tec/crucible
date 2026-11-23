@@ -56,28 +56,14 @@
 //     unaffected — it already infers from ALL declared plans regardless of
 //     status.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// The live-update test mounts with a SHORT poll (its own mount only) and
+// waits for that tick's read through the shared `waitForPollTick` (1 s
+// deadline); the bound is sized to the short tick.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface EventFixture {
   id: string;
@@ -136,17 +122,12 @@ interface MountOpts {
   projects: ProjectFixture[];
   events: EventFixture[];
   plans: PlanFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
-let cacheBust = 0;
-
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
       // CR-CRU-173 \u00a7S1 re-pin (approved in advance) \u2014 see
@@ -166,30 +147,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`workflow-history-refinements.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?workflowHistoryRefinements=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
@@ -423,6 +389,7 @@ describe("§S1.3 executing-CR exclusion — open plan lives only in Active; clos
     };
 
     const opts: MountOpts = {
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Exclusion Project" })],
       events: [],

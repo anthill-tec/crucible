@@ -1867,5 +1867,15 @@ if (typeof window !== "undefined") {
     unfoldCoverageBucket,
     unfoldCoverageSubset,
     coverageHeatSlices,
+    // The shell's timer intervals (ms), built fresh on every evaluation so a
+    // mount can replace them without touching any exported constant.
+    intervals: {
+      pollMs: 5000,
+      cycleTickMs: 10_000,
+      runTickMs: 1000,
+      watchdogMs: 5000,
+      silenceMs: 20_000,
+      reconnectMs: 5000,
+    },
   };
 }

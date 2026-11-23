@@ -65,31 +65,14 @@
 //     add a vacuously-passing test, which is out of place in a RED-only file;
 //     that existing test already stands as this AC's evidence.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-// bun's default per-test timeout (5000ms) is shorter than POLL_WAIT_MS —
-// any test calling waitForPollTick() needs this explicit override (same
-// precedent as tests/integration/workflow-tab.test.ts's POLL_TEST_TIMEOUT_MS).
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// A live-update test mounts with a SHORT poll (its own mount only) and waits
+// for that tick's read through the shared `waitForPollTick` (1 s deadline);
+// the bound is sized to the short tick, so a poll that never fires fails fast.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface CycleFixture {
   id: number;
@@ -166,6 +149,8 @@ interface MountOpts {
   events: GateEventFixture[];
   plans: PlanFixture[];
   agents?: AgentFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 // The posting identity of a gate fixture, live: its run is being driven.
@@ -173,15 +158,8 @@ function liveIdentity(agentId: string): AgentFixture {
   return { agentId, status: "online", liveness: "online" };
 }
 
-let cacheBust = 0;
-
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
       // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
@@ -202,30 +180,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`workflow-gate-widget.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?workflowGateWidget=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -413,6 +376,7 @@ describe("§S2/AC3 — ingesting a newer in-flight snapshot of the SAME run repl
     });
 
     const opts = {
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Gate Widget Latest Wins" })],
       events: [interimGate] as GateEventFixture[],
@@ -486,6 +450,7 @@ describe("§S6 History lens — wave state gains `gated` (a passed/checks-passed
     };
 
     const opts = {
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Gate Widget Gated" })],
       events: [] as GateEventFixture[],

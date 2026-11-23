@@ -46,27 +46,13 @@
 //     under testid `gate-run-line` — which is why AC5's drill-in pins below
 //     expect to see it too, with no Now-specific wiring.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// A poll re-render test mounts with a SHORT poll (its own mount only) and
+// waits for that tick's read through the shared `waitForPollTick` (1 s
+// deadline); the bound is sized to the short tick.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -163,9 +149,9 @@ interface MountOpts {
   // (the `:root` element itself) out-prioritizes any stylesheet rule by CSS
   // cascade, so this is sound whether or not media queries are evaluated.
   band?: "desktop" | "tablet" | "phone";
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
-
-let cacheBust = 0;
 
 function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
   const now = Date.now();
@@ -207,15 +193,14 @@ function gateEvent(
 }
 
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-  if (opts.band !== undefined) {
-    document.documentElement.style.setProperty("--band", opts.band);
-  }
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  const band = opts.band;
+  await mountUi({
+    pathname: opts.pathname ?? "/",
+    intervals: opts.intervals,
+    beforeBoot: () => {
+      if (band !== undefined) document.documentElement.style.setProperty("--band", band);
+    },
+    fetch: async (url: string) => {
     let body: unknown;
     const eventDetailMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isEventsListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
@@ -241,30 +226,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`workflow-now-pane.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?workflowNowPane=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+    },
+  });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -478,6 +449,7 @@ describe("§S2/AC3 — the newest gate in flight renders F21's gate view in Now"
     ];
 
     const opts: MountOpts = {
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Now Pane Redecide" })],
       events: [firstBrief],
@@ -1098,6 +1070,7 @@ describe("§S1/AC2 — Now's and History's titles render outside their own scrol
   test("each title renders exactly once, never duplicated across a poll re-render", async () => {
     const key = "now-pane-titles-no-duplicate";
     await mountApp({
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Pane Titles No Duplicate" })],
       events: [],
@@ -1272,6 +1245,7 @@ describe("CR-CRU-178 \u00a7S1/AC1 \u2014 a header bar (name + subtitle) renders 
   test("each header bar and Now's band render exactly once, never duplicated across a poll re-render", async () => {
     const key = "two-panes-headers-no-duplicate";
     await mountApp({
+      intervals: SHORT_POLL,
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Two Panes Headers No Duplicate" })],
       events: [],

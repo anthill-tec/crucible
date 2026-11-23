@@ -59,27 +59,13 @@
 // global `GET /api/v2/plans` returns the full set — mirroring how the real
 // server derives both from the same store.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// The poll test mounts with a SHORT poll (its own mount only) and waits for
+// the tick's read through the shared `waitForPollTick` (1 s deadline); every
+// other mount keeps the production cadence, so its call counts see no poll.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface ProjectFixture {
   key: string;
@@ -132,9 +118,10 @@ interface MountOpts {
   projects: ProjectFixture[];
   events: EventFixture[];
   plans: PlanFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
-let cacheBust = 0;
 let scopedPlanCalls: { key: string }[] = [];
 let globalPlanCalls = 0;
 let liveEvents: EventFixture[] = [];
@@ -167,17 +154,12 @@ function runEvent(overrides: Partial<EventFixture> & { id: string; projectKey: s
 }
 
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
   scopedPlanCalls = [];
   globalPlanCalls = 0;
   liveEvents = opts.events.map((e) => ({ ...e }));
   livePlans = opts.plans.map((p) => ({ ...p }));
 
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     const scopedMatch = /\/api\/v2\/projects\/([^/?]+)\/plans(?:\?|$)/.exec(url);
     if (scopedMatch !== null) {
       const key = decodeURIComponent(scopedMatch[1]!);
@@ -213,30 +195,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
       return { ok: true, status: 200, json: async () => body } as Response;
     }
     throw new Error(`home-marker-parity.test.ts mountApp: unexpected fetch url ${url}`);
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?homeMarkerParity=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function scopedCallCount(key: string): number {
@@ -362,6 +329,7 @@ describe("§S3.2 — home fetches GET /api/v2/plans (global); a workspace stays 
       };
 
       await mountApp({
+        intervals: SHORT_POLL,
         pathname: "/",
         projects: [project({ key: keyA, name: "Poll A" })],
         events: [],

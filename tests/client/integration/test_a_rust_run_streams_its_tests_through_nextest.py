@@ -40,6 +40,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.client.client_cadence_settings import SHORT_RELAY
 from tests.client.live_run_harness import RecordingBoard
 from tests.client.rust_stream_harness import (
     AGENT,
@@ -48,7 +49,6 @@ from tests.client.rust_stream_harness import (
     IGNORE_RUN_FAIL_VERBS,
     RUN_ID,
     START,
-    TIMEOUT,
     VERBS,
     StreamedRustProject,
     diagnostics,
@@ -69,6 +69,13 @@ DISTINCT_LCOV = "SF:src/streamed.rs\nDA:7,1\nLF:1\nLH:1\nend_of_record\n"
 # with `--cycle` as its binding.
 GATED_VERBS = ("test", "regression-ingest", "smoke-test",
                "workspace-regression", "pre-merge-gate")
+# Every drive runs the client through the test-only launcher with the relay
+# and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth
+# of production's 2 s, and each drive is bounded by `TIMEOUT`.
+TIMEOUT = 20
+# How long a drive waits for the relay to land what the runner wrote: twenty-five of
+# its 0.2 s ticks.
+RELAY_WAIT = 5.0
 
 
 def _flag_pair(argv, pair):
@@ -88,7 +95,7 @@ class _Streamed(unittest.TestCase):
     maxDiff = 4000
 
     def project(self, **options):
-        return StreamedRustProject(self, **options)
+        return StreamedRustProject(self, settings=SHORT_RELAY, timeout=TIMEOUT, **options)
 
     def index(self, found, where):
         """`found`, an index that must exist."""
@@ -400,7 +407,8 @@ class EachStateOnEveryVerbTest(_Streamed):
                     proc = subprocess.Popen(p.argv(label), cwd=p.dir, env=env,
                                             stdout=subprocess.PIPE, stderr=err, text=True)
                     try:
-                        relayed = wait_until(lambda: len(results(p.held(), "ok")) == 2, 8)
+                        relayed = wait_until(
+                            lambda p=p: len(results(p.held(), "ok")) == 2, RELAY_WAIT)
                         if relayed:
                             proc.send_signal(signal.SIGTERM)
                         stdout, _ = proc.communicate(timeout=TIMEOUT)
@@ -460,10 +468,10 @@ class EachStateOnEveryVerbTest(_Streamed):
                 p.board.script_list_total(5)
                 result = p.drive(label, FAKE_TOTAL="3", FAKE_HUMAN_TOTAL="99")
                 messages = p.board.messages()
-                closing = [m for m in messages if re.match(r"^ran \d+/\d+", m)]
+                closing = [m for m in messages if m and re.match(r"^ran \d+/\d+", m)]
                 self.assertEqual(closing, ["ran 3/5"],
                                  f"{label}: messages={messages!r} {diagnostics(result)}")
-                self.assertEqual([m for m in messages if "/99" in m], [],
+                self.assertEqual([m for m in messages if m and "/99" in m], [],
                                  f"{label}: nextest's human total is never narrated")
 
     def test_ignore_run_fail_is_refused_on_each_verb_that_accepted_it(self):
@@ -496,7 +504,8 @@ class EachStateOnEveryVerbTest(_Streamed):
             with self.subTest(verb=label):
                 board = RecordingBoard()
                 board.refuse_cycle_binding(refused, active)
-                p = StreamedRustProject(self, board=board)
+                p = StreamedRustProject(self, board=board, settings=SHORT_RELAY,
+                                        timeout=TIMEOUT)
                 result = p.drive(label, "--cycle", str(refused), FAKE_TOTAL="2")
                 where = f"{label}: {diagnostics(result)}"
                 posts = p.posts()

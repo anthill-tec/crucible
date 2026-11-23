@@ -7588,12 +7588,13 @@ def _reexport_run_module(module):
     on this module, as the same object: the names this module uses itself by
     name, then the rest, so a client's `_axi().<name>` reaches each."""
     global RunAbandoned, abandon_trap, abort_run, emit_bracket_abandoned
-    global narration_poster
+    global narration_poster, SETTINGS
     RunAbandoned = module.RunAbandoned
     abandon_trap = module.abandon_trap
     abort_run = module.abort_run
     emit_bracket_abandoned = module.emit_bracket_abandoned
     narration_poster = module.narration_poster
+    SETTINGS = module.SETTINGS
     _reexport_module(module)
 
 
@@ -8297,9 +8298,9 @@ def cmd_gate_report(args, project_dir, ops):
 
 
 # §S8 — how often `gate-run` posts an INTERIM snapshot while the proxied run is
-# in flight, and how often it wakes to check. One cadence for the whole fleet.
-_GATE_POLL_CADENCE_S = 2.0
-_GATE_POLL_TICK_S = 0.4
+# in flight, and how often it wakes to check, are the settings
+# `SETTINGS.gate_poll_cadence_seconds` and `SETTINGS.gate_poll_tick_seconds`,
+# read on each iteration of `stream_axi_ladder`.
 
 # A driven gate run posts its snapshots under a RUN IDENTITY of its own: the
 # caller's id, this suffix and the run it drives \u2014 `<caller>\u00b7gate\u00b7<run>`,
@@ -8491,7 +8492,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     posted_interim = False
     while proc.poll() is None:
         now = time.monotonic()
-        if last_poll is None or (now - last_poll) >= _GATE_POLL_CADENCE_S:
+        if (last_poll is None
+                or (now - last_poll) >= SETTINGS.gate_poll_cadence_seconds):
             last_poll = now
             if heartbeat is not None:
                 heartbeat(GATE_RUN_DRIVING_MESSAGE)
@@ -8508,7 +8510,7 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
                                   release)
                     last_ladder = ladder
                     posted_interim = True
-        time.sleep(_GATE_POLL_TICK_S)
+        time.sleep(SETTINGS.gate_poll_tick_seconds)
     return posted_interim
 
 

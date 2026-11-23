@@ -61,6 +61,7 @@ from collections import namedtuple
 from pathlib import Path
 from unittest import mock
 from tests.client import TEST_INSTALL_CLIENTS
+from tests.client.client_cadence_settings import short_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
@@ -339,12 +340,21 @@ class _GateRunStreamTestBase(unittest.TestCase):
     # A bounded hold is NOT a failed run — the tool says so itself — so the
     # proxied process exits 0 in every drive below.
     TOOL_EXIT = 0
-    # Shorter than the 2 s posting cadence: the whole drive is ONE cadence
+    # The client's gate-run poll cadence and tick for every drive here: 0.3 of
+    # production's 2.0 s / 0.4 s, set on the loaded client's own settings and
+    # restored after the test. Every run length below is scaled by the same
+    # factor, so each drive spans the same number of cadence windows it did
+    # at production cadence.
+    CADENCE_SECONDS = 0.6
+    TICK_SECONDS = 0.12
+    # Shorter than the 0.6 s posting cadence: the whole drive is ONE cadence
     # window, which is what the cadence criterion counts POSTs across.
-    RUN_SECONDS = 1.0
+    RUN_SECONDS = 0.3
 
     def setUp(self):
         self.module = _load_module(BUN_CLIENT_PATH, "streams_its_ladder_client")
+        short_settings(self, self.module, gate_poll_cadence_seconds=self.CADENCE_SECONDS,
+                       gate_poll_tick_seconds=self.TICK_SECONDS)
         self.tmpdir = tempfile.mkdtemp(prefix="streams-its-ladder-")
         (Path(self.tmpdir) / ".env").write_text(
             "CRUCIBLE_PROJECT_KEY=" + self.PROJECT_KEY + "\n")
@@ -665,8 +675,9 @@ class ASealingNineRowSnapshotIsNeverPostedAsInterimTest(_GateRunStreamTestBase):
 
 
 class ALadderHeldAcrossCadenceWindowsIsPostedOnceTest(_GateRunStreamTestBase):
-    """§S2's volume control, ruled 2026-09-10. The run sits at ONE step for five
-    seconds — several 2 s cadence windows — and the board gets ONE gate.
+    """The volume control, ruled 2026-09-10. The run sits at ONE step for
+    several cadence windows (five seconds at production's 2 s cadence, 1.5 s
+    at this file's 0.6 s) — and the board gets ONE gate.
 
     The arithmetic behind the ruling: at a 2 s cadence a 45-minute pipeline
     posts ~1350 gate events, against 1842 events on this whole board. The step
@@ -677,9 +688,9 @@ class ALadderHeldAcrossCadenceWindowsIsPostedOnceTest(_GateRunStreamTestBase):
 
     STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
-    # Five seconds spans three 2 s posting windows, so an unthrottled loop has
+    # 1.5 s spans three 0.6 s posting windows, so an unthrottled loop has
     # three chances to post the same unchanged ladder.
-    RUN_SECONDS = 5.0
+    RUN_SECONDS = 1.5
 
     def test_a_ladder_held_across_several_cadence_windows_posts_exactly_one_gate(self):
         drive = self.drive()
@@ -709,7 +720,7 @@ class AnUnchangedShortLadderIsNotRepostedEveryWindowTest(_GateRunStreamTestBase)
 
     STATUS_SNAPSHOT = _SHORT_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
-    RUN_SECONDS = 5.0
+    RUN_SECONDS = 1.5
 
     def test_an_unchanged_ladder_is_posted_once_however_many_windows_open(self):
         drive = self.drive()
@@ -732,8 +743,11 @@ class ALadderThatAdvancesIsPostedAgainTest(_GateRunStreamTestBase):
 
     STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
-    RUN_SECONDS = 5.0
-    ADVANCE_AFTER = 3.0
+    # 1.8 s spans three 0.6 s posting windows. The ladder moves 0.6 s in, so a
+    # later poll sees the advanced ladder with a whole window to spare before
+    # the run ends.
+    RUN_SECONDS = 1.8
+    ADVANCE_AFTER = 0.6
 
     def fake_tool_body(self):
         return _FAKE_ADVANCING_BODY.format(
@@ -770,13 +784,13 @@ class TwoLaddersInsideOneCadenceWindowPostOnceTest(_GateRunStreamTestBase):
 
     Every other drive in this file holds ONE ladder for its whole length, so
     the LADDER throttle alone accounts for each of their POST counts: delete
-    the `(now - last_poll) >= _GATE_POLL_CADENCE_S` guard entirely and not one
-    of them goes red. This drive separates the two throttles. The run is
-    SHORTER than a single 2 s cadence window and its ladder ADVANCES inside
-    that window, so the ladder check has nothing left to withhold and the
-    cadence is the only thing that can: with it, the tool is asked once and one
-    gate reaches the board; without it, the loop wakes on its 0.4 s tick, sees
-    a ladder it has not posted, and posts a second time.
+    the `(now - last_poll) >=` cadence guard entirely and not one of them goes
+    red. This drive separates the two throttles. The run is SHORTER than a
+    single cadence window and its ladder ADVANCES inside that window, so the
+    ladder check has nothing left to withhold and the cadence is the only
+    thing that can: with it, the tool is asked once and one gate reaches the
+    board; without it, the loop wakes on its short tick, sees a ladder it has
+    not posted, and posts a second time.
 
     THE POLL COUNT IS ASSERTED FOR ITS OWN SAKE, because it pins the repair the
     cadence needed. The poll clock used to be stamped only when a gate was
@@ -786,19 +800,23 @@ class TwoLaddersInsideOneCadenceWindowPostOnceTest(_GateRunStreamTestBase):
     what makes the window mean anything, and a drive shorter than one window
     may therefore ask the tool exactly once.
 
-    Neither constant is read here: the criterion is the observable POST and
-    poll counts of a real drive, and reading `_GATE_POLL_CADENCE_S` back would
-    make this test agree with whatever the code happens to say."""
+    Neither setting is read back here: the criterion is the observable POST
+    and poll counts of a real drive, and reading the cadence back would make
+    this test agree with whatever the code happens to say. This drive sets a
+    1.0 s cadence and a 0.2 s tick of its own, keeping the half-second margin
+    its 2 s window had."""
 
     STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
-    # 1.5 s against a 2 s cadence: the whole drive is ONE window, with half a
-    # second of margin so a slow machine cannot open a second one.
-    RUN_SECONDS = 1.5
-    # ...and the ladder moves 0.4 s in — the same `review` completes / `test`
-    # starts transition the sibling drives across five seconds, here well
-    # inside the single window.
-    ADVANCE_AFTER = 0.4
+    # A 1.0 s cadence and a 0.2 s tick: a run of 0.5 s is ONE window, with
+    # half a second of margin so a slow machine cannot open a second one.
+    CADENCE_SECONDS = 1.0
+    TICK_SECONDS = 0.2
+    RUN_SECONDS = 0.5
+    # ...and the ladder moves 0.2 s in — the same `review` completes / `test`
+    # starts transition the sibling drives make across several windows, here
+    # well inside the single window, so the loop's later ticks see it.
+    ADVANCE_AFTER = 0.2
 
     def fake_tool_body(self):
         return _FAKE_ADVANCING_BODY.format(

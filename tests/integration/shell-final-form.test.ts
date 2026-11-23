@@ -21,23 +21,13 @@
 // "Agents" tab + separate AgentsRail/VitalsRail, health-pill shows
 // "crucible <version> · N events" instead of the new fidelity text).
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, settleReads, uiFetchLog, unmountUi, waitUntil, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+/** The down-state test's own mount: a short watchdog over a short silence
+ *  window (both at their safe minimums), so the flip takes a few hundred
+ *  milliseconds instead of the production 20 s + 5 s. */
+const SHORT_WATCHDOG: UiIntervals = { watchdogMs: 100, silenceMs: 300 };
 
 interface AgentFixture {
   agentId: string;
@@ -84,9 +74,9 @@ interface MountOpts {
   health?: unknown;
   /** When true, every fetch (including retries) rejects — simulates a fully unreachable backend. */
   backendDown?: boolean;
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
-
-let cacheBust = 0;
 
 /**
  * Boots the REAL public/app.js shell inside a fresh happy-dom window: real
@@ -102,12 +92,9 @@ async function mountApp(opts: MountOpts): Promise<void> {
   // surfaces test remounting for / then /p/<key>) would otherwise hit
   // "Failed to register. Happy DOM has already been globally registered."
   // on the second call, before any production source even runs. The
-  // existing afterEach still does the final unregister for the test.
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  // existing afterEach still does the final unregister for the test. The
+  // shared UI mount unregisters any previous window itself.
+  await mountUi({ pathname, intervals: opts.intervals, fetch: async (url: string) => {
     if (opts.backendDown === true) throw new Error("simulated network failure");
     let body: unknown;
     if (url.includes("/api/v2/projects")) body = { ok: true, projects: opts.projects ?? [] };
@@ -117,22 +104,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
       body = opts.health ?? { ok: true, version: "2.0.0-test", counts: { events: 0 } };
     } else throw new Error(`shell-final-form.test.ts mountApp: unexpected fetch url ${url}`);
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  // Vendor bundles are classic (nomodule) scripts that attach `van`/`vanX`
-  // to the ambient global — `(0, eval)` runs them as an INDIRECT eval, i.e.
-  // in global scope, same as a real <script> tag would.
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  // app-logic.mjs is a real ES module cached by resolved specifier — a
-  // cache-busting query string forces a FRESH module instance per test so
-  // its `window.CrucibleLogic = {...}` bridge attaches to THIS test's fresh
-  // happy-dom window, not a stale one from an earlier test.
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?shellFinalForm=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
+  } });
 
   await settle();
 }
@@ -143,7 +115,7 @@ async function settle(ticks = 5): Promise<void> {
 }
 
 afterEach(async () => {
-  await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 describe("§S5 AC1 — workspace Project pane (agents nested, ⌁-marked)", () => {
@@ -714,23 +686,24 @@ describe("§S5 AC7 — Health Pill fidelity", () => {
   test(
     "shows exactly 'server unreachable · retrying…' once the backend goes unreachable (no version/event-count text)",
     async () => {
-      await mountApp({ pathname: "/", projects: [], backendDown: true });
+      await mountApp({ pathname: "/", projects: [], backendDown: true, intervals: SHORT_WATCHDOG });
 
-      // The current shell's watchdog only flips reachability after a
-      // silence window (>20s) checked on a 5s tick, and EventSource is
-      // undefined under happy-dom (confirmed: app.js falls back to
-      // startPolling()), so lastFrameAt never advances after boot — the
-      // silence clock starts at mount and the flip is a REAL passage of
-      // wall-clock time in this harness. Budgeted like the existing
-      // Playwright F10 down-state test (tests/e2e/shell.e2e.ts), which
-      // allows up to 28s for the same reason.
-      await new Promise((resolve) => setTimeout(resolve, 26_000));
+      // The shell's watchdog only flips reachability after a silence window
+      // checked on its own tick, and EventSource is undefined under happy-dom
+      // (app.js falls back to startPolling()), so lastFrameAt never advances
+      // after boot — the silence clock starts at mount. This mount's window
+      // and tick are short; the wait is for the watchdog's own probe past
+      // the window (a condition, 1 s deadline), never a duration.
+      const probes = (): number => uiFetchLog.filter((url) => url.includes("/api/v2/health")).length;
+      const bootProbes = probes();
+      await waitUntil(() => probes() > bootProbes, "the watchdog's /api/v2/health probe past the silence window");
+      await settleReads();
 
       const pill = document.querySelector('[data-testid="health-pill"]');
       expect(pill).not.toBeNull();
       const text = (pill!.textContent ?? "").trim();
       expect(text).toBe("server unreachable · retrying…");
     },
-    35_000,
+    5_000,
   );
 });

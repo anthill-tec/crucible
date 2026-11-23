@@ -7,29 +7,19 @@
 // same harness pattern as tests/integration/inpane-liveness.test.ts (fetch scripted to
 // read live `opts.*` fixtures so a poll-tick refetch observes an in-place
 // mutation — the "SSE-simulated" liveness update).
-import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+// A test that waits on a poll tick mounts with a SHORT poll for its own mount
+// only and waits for that tick's read through the shared `waitForPollTick`
+// (1 s deadline); the bound is sized to the short ticks, so a poll that never
+// fires fails fast.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
-// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js).
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+/** Every display tick short as well, for a test that holds a sealed value
+ *  across them: a ticker that ignored the seal would move within the window. */
+const SHORT_TICKS: UiIntervals = { pollMs: 200, runTickMs: 200, cycleTickMs: 200 };
 
 interface EventBriefFixture {
   id: string;
@@ -72,18 +62,13 @@ interface MountOpts {
   projects: ProjectFixture[];
   agents: AgentFixture[];
   events: EventBriefFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
-let cacheBust = 0;
-
-/** Same mountApp harness pattern as tests/integration/inpane-liveness.test.ts. */
+/** The shared UI mount, answered from this file's live fixture objects. */
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
@@ -97,30 +82,16 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`agent-runtime-pane.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?agentRuntimePane=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
+  setSystemTime();
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -161,6 +132,7 @@ describe("CR-CRU-011 C2 §S2 — Project pane agent runtime display", () => {
       const projectKey = "proj-runtime-live-1";
       const agentId = "live-runtime-agent";
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Live Runtime Project" })],
         agents: [agent({ agentId, projectKey, liveness: "online", runtime_ms: 5_000 })],
@@ -198,11 +170,15 @@ describe("CR-CRU-011 C2 §S2 — Project pane agent runtime display", () => {
   );
 
   test(
-    "a TOMBSTONED agent sub-row's rendered runtime stays IDENTICAL across time — real wall-clock advances but the server-supplied (sealed) runtime_ms does not change",
+    "a TOMBSTONED agent sub-row's rendered runtime stays IDENTICAL after the clock is moved 1.2s with setSystemTime and one short tick runs — the server-supplied (sealed) runtime_ms does not change",
     async () => {
+      // The wall clock is the test's own: pinned here, moved below.
+      const t0 = Date.now();
+      setSystemTime(t0);
       const projectKey = "proj-runtime-tomb-1";
       const agentId = "tombstoned-runtime-agent";
       const opts: MountOpts = {
+        intervals: SHORT_TICKS,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Tombstoned Runtime Project" })],
         agents: [
@@ -226,11 +202,12 @@ describe("CR-CRU-011 C2 §S2 — Project pane agent runtime display", () => {
       const textInitial = (runtimeEl!.textContent ?? "").trim();
       expect(textInitial).toMatch(/\d/);
 
-      // Real wall-clock advances (short wait — would catch a naive
-      // client-side setInterval ticker that ignores liveness). The fixture's
+      // The wall clock advances 1.2 s (moved, not waited out), then a short
+      // tick runs — a naive client-side ticker that ignores liveness would
+      // re-derive the runtime from the moved clock here. The fixture's
       // runtime_ms is UNCHANGED (simulating the server's sealed value).
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      await settle();
+      setSystemTime(t0 + 1_200);
+      await waitForPollTick();
       const rowAfterShortWait = findByText(
         document.querySelector('[data-testid="project-pane"]') as HTMLElement,
         '[data-testid="agent-row"]',

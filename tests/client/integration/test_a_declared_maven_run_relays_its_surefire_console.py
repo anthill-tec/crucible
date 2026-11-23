@@ -58,6 +58,11 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from tests.client.client_cadence_settings import (
+    SHORT_RELAY,
+    launcher_command,
+    short_settings,
+)
 from tests.client.live_run_harness import (
     CLIENTS,
     STREAM_CODEC,
@@ -102,10 +107,14 @@ VERBS = (
 
 MARKER = "MVN_CONSOLE_RELAY_PARKED"
 BANNER = "WARNING: the fake mvnw speaks on stderr too"
-TIMEOUT = 120
+# Every drive runs the client through the test-only launcher with the relay
+# and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth
+# of production's 2 s; the in-process drive sets the same on its client.
+TIMEOUT = 20
 MARKER_WAIT = 30
-# The relay sends every 2 s: a live relay's first batch lands well inside this.
-RELAY_WAIT = 10
+# The relay sends every 0.2 s: a live relay's first batch lands well inside
+# this, and a relay that never wakes leaves the drive uncued when it passes.
+RELAY_WAIT = 5.0
 
 _SCRUBBED = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_COVERAGE_PROFILE",
              "MVN_CRUCIBLE_PROJECT_DIR", "MVN_CRUCIBLE_MAVEN_DIR", "MVN_CRUCIBLE_COMPOSE_FILE")
@@ -381,7 +390,7 @@ class _MavenProject(unittest.TestCase):
     # ── driving ─────────────────────────────────────────────────────────────
 
     def command(self, verb, *extra, agent=True):
-        argv = [sys.executable, self.client, verb]
+        argv = launcher_command(self.client, verb, **SHORT_RELAY)
         if agent:
             argv += ["--agent", AGENT]
         return argv + ["--project-dir", self.project, *extra]
@@ -419,7 +428,8 @@ class _MavenProject(unittest.TestCase):
             proc = subprocess.Popen(cmd, cwd=self.project, env=env,
                                     stdout=subprocess.PIPE, stderr=err, text=True)
             try:
-                if _wait_until(lambda: MARKER in _read(stderr_path), MARKER_WAIT):
+                if _wait_until(lambda: MARKER in _read(stderr_path) or proc.poll() is not None,
+                               MARKER_WAIT) and MARKER in _read(stderr_path):
                     cued = _wait_until(lambda: release_when(self.board), RELAY_WAIT)
                     if interrupt:
                         proc.send_signal(signal.SIGINT)
@@ -732,6 +742,7 @@ class AnExceptionFromTheRunFinishesTheRelayAndIsReRaisedTest(unittest.TestCase):
         _write_script(os.path.join(self.project, "mvnw"), "import sys\nsys.exit(0)\n")
         self.mvn = load_client("mvn-crucible.py")
         self.core = self.mvn._axi()
+        short_settings(self, self.mvn, **SHORT_RELAY)
 
     def _raising_run(self, cmd, cwd, env, log_path, narrator=None, *args, **kwargs):
         for line in ("[INFO] Running com.acme.C01Test\n",
@@ -889,6 +900,8 @@ class AnUndeclaredRunIsTodaysRunTest(_MavenProject):
                             if isinstance(m, str) and (m.startswith("ran ") or m == INGESTING)],
                 "envelope": {k: axi.get(k) for k in ("ok", "run", "warnings")},
             }
+        self.assertEqual(observed["declaring nothing"]["exit"], 0,
+                         "the drive the other is compared with ran its suite green")
         self.assertEqual(observed["declaring another verb"], observed["declaring nothing"])
 
 

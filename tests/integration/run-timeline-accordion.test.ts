@@ -43,34 +43,19 @@
 // real-poll-tick technique (§7 there) to simulate an actual SSE/poll-driven
 // feed re-render without stubbing `vanX.replace` or `refetch` directly.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js,
-// `setInterval(refetch, 5000)` — `typeof EventSource === "undefined"` under
-// happy-dom so `connectStream()` always falls back to `startPolling()`, per
-// tests/integration/plan-scoping.test.ts's harness note and tests/integration/inpane-liveness.test.ts).
-// Every test here except the explicit re-render pin settles on short ticks
-// far below this, so no poll-driven refetch can be responsible for a passing
-// assertion in those.
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// `typeof EventSource === "undefined"` under happy-dom, so `connectStream()`
+// always falls back to `startPolling()` (public/app.js), per
+// tests/integration/plan-scoping.test.ts's harness note and
+// tests/integration/inpane-liveness.test.ts. Every test here except the
+// explicit re-render pin mounts with the PRODUCTION poll (5000ms) and settles
+// on short ticks far below it, so no poll-driven refetch can be responsible
+// for a passing assertion in those. The re-render pin alone mounts with a
+// SHORT poll (its own mount only) and waits for that tick's read through the
+// shared `waitForPollTick` (1 s deadline).
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface EventFixture {
   id: string;
@@ -121,9 +106,10 @@ interface MountOpts {
   projects: ProjectFixture[];
   events: EventFixture[];
   plans: PlanFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
-let cacheBust = 0;
 // Live-mutable store the mocked fetch reads on EVERY call (not just at mount
 // time) — the same technique tests/integration/plan-scoping.test.ts §7 uses for its own
 // poll-tick regression pin. Mutating this between the initial mount and a
@@ -133,15 +119,10 @@ let eventsStore: EventFixture[] = [];
 let plansStore: PlanFixture[] = [];
 
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
   eventsStore = opts.events;
   plansStore = opts.plans;
 
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: plansStore };
@@ -157,30 +138,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`run-timeline-accordion.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?runTimelineAccordion=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
@@ -391,6 +357,7 @@ describe("§S2b run-timeline accordion — default expanded, survives a poll-dri
       };
 
       await mountApp({
+        intervals: SHORT_POLL,
         pathname: `/p/${key}`,
         projects: [project({ key, name: "CR025 Accordion Persist" })],
         events: [runA1, runB1],

@@ -56,6 +56,8 @@ export interface StartServerOpts {
   port?: number;
   hostname?: string;
   dbPath?: string;
+  /** The SSE stream's keep-alive interval in ms; defaults to 15 000. */
+  keepAliveMs?: number;
 }
 
 /**
@@ -192,7 +194,7 @@ function err(status: number, error: string): Response {
 
 /** CR-CRU-004 §S3 — SSE stream: hello frame, store-change frames, keep-alives.
  *  `signal` aborts when the client goes away or the board stops. */
-function handleStream(store: Store, signal: AbortSignal): Response {
+function handleStream(store: Store, signal: AbortSignal, keepAliveMs: number): Response {
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | undefined;
   let keepAlive: ReturnType<typeof setInterval> | undefined;
@@ -220,7 +222,7 @@ function handleStream(store: Store, signal: AbortSignal): Response {
       });
       keepAlive = setInterval(() => {
         send(`: keep-alive ${Date.now()}\n\n`);
-      }, 15_000);
+      }, keepAliveMs);
       // reader.cancel() from a fetch client surfaces as request abort here.
       signal.addEventListener("abort", () => {
         cleanup();
@@ -307,6 +309,8 @@ export interface CreateBoardOpts {
   /** The bound listener, read each time health answers; `null` for a board
    *  with no socket, which never invents a port. */
   listener: () => ListenerResolution | null;
+  /** The SSE stream's keep-alive interval in ms; defaults to 15 000. */
+  keepAliveMs?: number;
 }
 
 /** A board's request router over one store, with or without a socket. */
@@ -337,7 +341,7 @@ async function nativeRequest(
  * three. `startServer` serves its `fetch`; a test calls it in process.
  */
 export function createBoard(opts: CreateBoardOpts): BoardHandle {
-  const { store, storeResolution, listener } = opts;
+  const { store, storeResolution, listener, keepAliveMs = 15_000 } = opts;
   const startedAt = Date.now();
   const held = new Set<AbortController>();
   let stopped = false;
@@ -388,7 +392,7 @@ export function createBoard(opts: CreateBoardOpts): BoardHandle {
     }
     // CR-CRU-004 §S3 — SSE change stream.
     if (req.method === "GET" && url.pathname === "/api/stream") {
-      return handleStream(store, signal);
+      return handleStream(store, signal, keepAliveMs);
     }
     // CR-CRU-004 §S1 — clean v2 surface, same store instance the retired
     // shim used.
@@ -478,7 +482,12 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   let listenerResolution: ListenerResolution = resolvedListener;
 
   // The health routes disclose the BOUND listener, read when they answer.
-  const board = createBoard({ store, storeResolution, listener: () => listenerResolution });
+  const board = createBoard({
+    store,
+    storeResolution,
+    listener: () => listenerResolution,
+    keepAliveMs: opts?.keepAliveMs,
+  });
 
   const server = Bun.serve({
     // CR-CRU-139 §S1 — the listener is CONFIGURATION: an explicit argument,

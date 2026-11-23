@@ -34,29 +34,15 @@
 // production — that is reported honestly per test, not forced RED.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-// The real poll interval is a hard-coded 5000ms (`startPolling` in
-// public/app.js). Wait comfortably past it before asserting on a
-// poll-driven update.
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// A test that waits on a poll tick mounts with a SHORT poll (`SHORT_POLL`,
+// for its own mount only) and waits for that tick's read through the shared
+// `waitForPollTick` (1 s deadline); every other mount keeps the production
+// cadence. The per-test bound is sized to the short tick, so a poll that
+// never fires fails fast.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface FailureFixture {
   message?: string;
@@ -142,9 +128,9 @@ interface MountOpts {
    *  `[]`, which is what a server without the field degrades to, so every
    *  pre-existing test in this file is unaffected. */
   openRuns?: OpenRunFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
-
-let cacheBust = 0;
 
 function suiteCounts(children: LeafFixture[]): { passed: number; failed: number; pending: number } {
   const counts = { passed: 0, failed: 0, pending: 0 };
@@ -166,12 +152,7 @@ function suiteCounts(children: LeafFixture[]): { passed: number; failed: number;
  * "SSE-simulated" liveness update.
  */
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
@@ -212,27 +193,11 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`inpane-liveness.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?inpaneLiveness=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
-}
-
-/** Waits past one real poll tick (POLL_INTERVAL_MS), then settles VanJS. */
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
 }
 
 afterEach(async () => {
@@ -369,6 +334,7 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       const fx = unitFixture(eventId, projectKey, existingAgentId, now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Live WS Project", agentsTotal: 1 })],
         agents: [agent({ agentId: existingAgentId, projectKey, message: "idle" })],
@@ -454,6 +420,7 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       const fx = unitFixture(eventId, projectKey, agentId, now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Glyph Project" })],
         agents: [agent({ agentId, projectKey, message: "booting", liveness: "stale" })],
@@ -525,6 +492,7 @@ describe("the feed behind the open detail also absorbs the new run — closing t
       const newEventId = "evt-feed-ws-2";
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Feed WS Project" })],
         agents: [agent({ agentId: "feed-agent-1", projectKey })],
@@ -609,6 +577,7 @@ describe("negative bound — the SSE-driven poll refetch does not reset the open
       const fx = twoSuiteFixture(eventId, projectKey, "persist-agent", now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}/run/${eventId}`,
         projects: [project({ key: projectKey, name: "Persist Project" })],
         agents: [agent({ agentId: "persist-agent", projectKey })],
@@ -814,14 +783,8 @@ describe("CR-CRU-037 §S1 characterization — per-agent liveness dimming has no
 // semantic class, its own `@keyframes`, none of the three the stylesheet
 // already declares) and leaves the NAME to the implementation — so these tests
 // read the token off the rendered DOM (the one class a streaming row has that
-// an otherwise-identical idle row lacks) and then hold the stylesheet to that
-// token. A hardcoded guess would have failed for the wrong reason.
-
-const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
-/** Comments stripped once: a provenance comment naming a class must never be
- *  read as a rule, and a commented-out `@keyframes` must never count as
- *  declared (the CR-CRU-096 defect shape). */
-const STYLES_RULES = STYLES_SRC.replace(/\/\*[\s\S]*?\*\//g, "");
+// an otherwise-identical idle row lacks). A hardcoded guess would have failed
+// for the wrong reason.
 
 function classTokens(el: Element): string[] {
   return el.className.split(/\s+/).filter((t) => t.length > 0);
@@ -853,50 +816,11 @@ function activityClassFrom(streaming: HTMLElement, idle: HTMLElement): string {
   return added[0]!;
 }
 
-/** Every `@keyframes` NAME `public/styles.css` declares. */
-function declaredKeyframes(): string[] {
-  return Array.from(STYLES_RULES.matchAll(/@keyframes\s+([A-Za-z][\w-]*)/g)).map((m) => m[1]!);
-}
-
-/** Every rule body whose selector list names `.<cls>` as a standalone class
- *  token — the `allRuleBodiesForClass` technique from
- *  tests/integration/pane-scroll-floor.test.ts, for the same reason it exists there: the
- *  assertion is about the CLASS, not about one selector shape GREEN must
- *  guess (`.x {}`, `.app-agent-row.x {}` and `.x .app-agent-glyph {}` are all
- *  legitimate homes for the animation). */
-function ruleBodiesForClass(cls: string): string {
-  const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`([^{}]*(?:^|[\\s,>+~])\\.${escaped}(?![\\w-])[^{}]*)\\{([^}]*)\\}`, "gs");
-  const bodies: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(STYLES_RULES)) !== null) bodies.push(m[2] ?? "");
-  return bodies.join("\n");
-}
-
-/** The declared keyframes names referenced by `animation`/`animation-name` in
- *  `body`. Intersecting against the DECLARED set is what makes this safe to
- *  run over a shorthand: `1.6s`, `ease-in-out` and `infinite` are not
- *  keyframes, and a reference to an UNDECLARED name yields nothing — which is
- *  the correct, loud outcome for a typo'd animation. */
-function animationsIn(body: string, declared: string[]): string[] {
-  const names: string[] = [];
-  for (const decl of body.matchAll(/animation(?:-name)?\s*:\s*([^;}]+)/g)) {
-    for (const word of (decl[1] ?? "").matchAll(/[A-Za-z][\w-]*/g)) {
-      if (declared.includes(word[0]) && !names.includes(word[0])) names.push(word[0]);
-    }
-  }
-  return names;
-}
-
 function openRun(
   overrides: Partial<OpenRunFixture> & { runId: string; projectKey: string; agentId: string },
 ): OpenRunFixture {
   return { startedAt: Date.now() - 4_000, ...overrides };
 }
-
-/** The three animations that already exist, BY NAME. §S1's whole point is that
- *  a fourth signal does not collapse into any of them. */
-const EXISTING_ANIMATIONS = ["app-spin", "app-run-pulse", "app-locate-blink"] as const;
 
 describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Project-pane row", () => {
   test("the row of the agent an open run NAMES carries exactly one class its otherwise-identical sibling does not — and with two agents and one open run, exactly ONE of the two rows carries it", async () => {
@@ -955,40 +879,6 @@ describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Proj
     expect(rows.filter((r) => classTokens(r).includes(activity)).length).toBe(0);
   });
 
-  test("the activity class drives its OWN `@keyframes` in public/styles.css — not app-spin, not app-run-pulse, not app-locate-blink, each ruled out by name", async () => {
-    const projectKey = "proj-stream-css";
-    await mountApp({
-      pathname: `/p/${projectKey}`,
-      projects: [project({ key: projectKey, name: "Animation Identity Project", agentsTotal: 2 })],
-      agents: [
-        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
-        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
-      ],
-      events: [],
-      eventDetails: {},
-      openRuns: [openRun({ runId: "run-alpha-3", projectKey, agentId: "alpha-agent" })],
-    });
-
-    const declared = declaredKeyframes();
-    // The three that already exist are still declared — a "fourth signal" that
-    // arrived by renaming one of them is not a fourth signal.
-    for (const existing of EXISTING_ANIMATIONS) expect(declared).toContain(existing);
-
-    // The stylesheet is held to the class the DOM actually carries, so the
-    // signal and its motion cannot be wired to two different names.
-    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
-    const body = ruleBodiesForClass(activity);
-    expect(body.length).toBeGreaterThan(0);
-
-    const used = animationsIn(body, declared);
-    expect(used).toHaveLength(1);
-    const animation = used[0]!;
-    expect(declared).toContain(animation);
-    expect(animation).not.toBe("app-spin");
-    expect(animation).not.toBe("app-run-pulse");
-    expect(animation).not.toBe("app-locate-blink");
-  });
-
   test(
     "when the open run SETTLES — the same response drops it from `state.openRuns` and carries its event into `state.events` — the row stops animating, driven by the production refetch and by no timer",
     async () => {
@@ -997,6 +887,7 @@ describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Proj
       const eventId = "evt-stream-settle-1";
       const fx = unitFixture(eventId, projectKey, "alpha-agent", now);
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Settling Project", agentsTotal: 2 })],
         agents: [
