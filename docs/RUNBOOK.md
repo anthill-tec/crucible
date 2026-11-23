@@ -443,9 +443,10 @@ command = ["scripts/hermetic/unit-check.sh"]
 - The command runs with the gate's environment unchanged: the client adds no variable and loads no hook.
 
 Exit 0 lets the gate go on. Any other exit stops it: the gate's one envelope reads `ok: false`, `stage: unit-check`,
-the command's `exit`, and the warning `unit-check-gate-abort`, with a `help` line naming the stage. The command's
-output goes to stderr, and no regression is started or filed. The stage files nothing on the board of its own; the
-gate's envelope carries it.
+the command's `exit`, and the warning `unit-check-gate-abort`, with a `help` line naming the stage and its command:
+``fix what <name> (`<command's first word>`) reported, or pass --skip-unit-check``. A stage named by the basename
+of the command's first word is named once, by that basename. The command's output goes to stderr, and no
+regression is started or filed. The stage files nothing on the board of its own; the gate's envelope carries it.
 
 With no table the gate goes on with a `unit-check-not-declared` warning. `--skip-unit-check` skips a declared
 stage; neither `--skip-lint` nor `--skip-check` skips it.
