@@ -482,9 +482,8 @@ def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
             return None
         output, exit_code = run_unit_check_command(spec, run_dir or project_dir)
     except LintRefused as refusal:
-        name = spec["name"] if spec else UNIT_CHECK_TABLE
         return _emit_gate_unit_check_abort(
-            ops, project_dir, agent_id, verb, name, 1,
+            ops, project_dir, agent_id, verb, spec, 1,
             {"error": str(refusal)}, carried_warnings)
     print(f"[crucible] {verb}: unit-check stage {spec['name']} exit={exit_code}",
           file=sys.stderr)
@@ -492,18 +491,32 @@ def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
         return None
     sys.stderr.write(output)
     return _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb,
-                                       spec["name"], exit_code, {},
+                                       spec, exit_code, {},
                                        carried_warnings)
 
 
-def _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb, name,
+def _unit_check_remedy(spec):
+    """The abort's first `help` line: what to fix, naming the stage and its
+    command. A stage named by the command's basename already names it; a
+    declared `name` has the command's first word beside it. A declaration
+    refused before it named a command names the table."""
+    if spec is None:
+        named = UNIT_CHECK_TABLE
+    else:
+        word = spec["command"][0]
+        named = spec["name"]
+        if named != os.path.basename(word):
+            named = f"{named} (`{word}`)"
+    return f"fix what {named} reported, or pass --skip-unit-check"
+
+
+def _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb, spec,
                                 exit_code, fields, carried_warnings):
+    name = spec["name"] if spec else UNIT_CHECK_TABLE
     ops.emit(verb, False,
              {"stage": UNIT_CHECK_GATE_STAGE, "exit": exit_code,
               "unitCheck": name, **fields,
-              "help": _core.gate_step_abort_help(
-                  verb, f"fix what {name} reported (or --skip-unit-check to "
-                        f"bypass)")},
+              "help": _core.gate_step_abort_help(verb, _unit_check_remedy(spec))},
              ops.context(project_dir, agent_id=agent_id),
              [*carried_warnings,
               {"code": UNIT_CHECK_GATE_ABORT,
