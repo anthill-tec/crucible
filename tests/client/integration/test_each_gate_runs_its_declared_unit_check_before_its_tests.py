@@ -412,6 +412,24 @@ class _SharedParsingCases(_UnitCheckDrive):
         self.assertRefusedNaming(self.unit_check_project(command=[str(path)], name=7),
                                  "`name` is 7, not a non-empty string")
 
+    def test_a_bare_table_header_is_refused_naming_the_file_and_command(self):
+        # An empty `[unit-check]` is declared, so it is refused, never read
+        # as "not declared".
+        self.unit_check()
+        self.assertRefusedNaming(self.unit_check_project(),
+                                 "`command` is None, not a list")
+
+    def test_a_key_that_is_not_a_table_is_refused_naming_the_file_and_the_key(self):
+        root = self.lint_only_project()
+        config = root / "crucible.toml"
+        # A top-level key goes before the file's first table header.
+        config.write_text(f'{STAGE} = "x"\n' + config.read_text(encoding="utf-8"),
+                          encoding="utf-8")
+        with open(config, "rb") as handle:
+            self.assertEqual(tomllib.load(handle).get(STAGE), "x",
+                             "fixture guard: the project declares the key as written")
+        self.assertRefusedNaming(root, "`unit-check` is 'x', not a table")
+
     def test_a_declared_name_names_the_stage_in_the_abort(self):
         path = self.failing_unit_check()
         result, axi = self.drive_gate(self.declared_project(path, name=DECLARED_NAME))
