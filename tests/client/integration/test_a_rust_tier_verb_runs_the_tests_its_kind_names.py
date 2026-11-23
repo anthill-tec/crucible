@@ -11,8 +11,9 @@ Every test drives the real `clients/rust-crucible.py` as a subprocess, from a
 scratch cargo project it owns, against a loopback `RecordingBoard` the project
 declares in its own `crucible.toml`. A fake `cargo` first on `PATH` answers as
 cargo-nextest does (`tests/client/fake_nextest.py`) with
-`FAKE_NEXTEST_KINDS=1`: its list marks a test whose binary kind the call's `-E`
-does not select as a mismatch, and its run runs only the selected tests. The
+`FAKE_NEXTEST_KINDS=1`: its list gives a binary whose kind the call's `-E` does
+not select no testcase, and an ignored test `ignored` unless the list carries
+`--run-ignored all`, and its run runs only the selected tests. The
 fake records every call's argv, so each test asserts what nextest was handed;
 the board records every request, so each test asserts what was filed.
 
@@ -108,7 +109,7 @@ code = fake_nextest.streamed_run(args, cases)
 if code is not None:
     sys.exit(code)
 if args[:2] == ["nextest", "run"]:
-    selected = [c for c in cases if fake_nextest.kind_selected(c, args)]
+    selected = [c for c in cases if fake_nextest.selected(c, args)]
     sys.stderr.write(f"    Starting {len(selected)} tests across 1 binary\n")
     sys.exit(0 if selected else 4)
 sys.exit(0)
@@ -587,6 +588,77 @@ class AnEmptyKindSelectionRefusesTest(_RustKindsProject):
                          self.where(result))
         self.assertEqual(len(self.cargo_calls("nextest", "run")), 1, self.where(result))
         self.assertFiledUnder(result, "integration")
+
+    def list_posts(self):
+        return [body for path, body in self.board.posts()
+                if path.startswith(RUNS + "/") and path.endswith("/tests")]
+
+    def assertIgnoredOutsideTheFilterIsEmpty(self, result):
+        """Refused, with no run and nothing filed: the run's own list, then
+        one more of the same selection with `--run-ignored all`."""
+        axi = self.envelope_of(result)
+        self.assertIs(axi.get("ok"), False, self.where(result))
+        self.assertNotEqual(result.returncode, 0, self.where(result))
+        self.assertIn(TIER_SELECTION_EMPTY, _codes(axi), f"envelope={axi!r}")
+        self.assertIn("test(zzz)", _said(axi), f"envelope={axi!r}")
+        self.assertEqual(self.cargo_calls("nextest", "run"), [], self.where(result))
+        lists = self.cargo_calls("nextest", "list")
+        self.assertEqual(len(lists), 2, self.where(result))
+        self.assertNotIn("--run-ignored", lists[0], f"lists={lists!r}")
+        self.assertEqual(_values(lists[1], "--run-ignored"), ["all"], f"lists={lists!r}")
+        self.assertEqual([a for a in lists[1] if a not in ("--run-ignored", "all")],
+                         lists[0], f"the same selection; lists={lists!r}")
+        self.assertNothingFiled(result)
+        self.assertEqual(self.list_posts(), [], self.where(result))
+
+    def test_an_ignored_test_outside_the_filter_leaves_the_selection_empty(self):
+        """nextest lists an ignored test as `ignored` even when the user's
+        `--filter` also leaves it out, so that alone never makes the
+        selection non-empty."""
+        self.cases = (LIB, IGNORED_TEST)
+        result = self.drive("integration", "--filter", "test(zzz)",
+                            agent="rust-empty-ignored-filtered")
+        self.assertIgnoredOutsideTheFilterIsEmpty(result)
+
+    def test_an_ignored_test_outside_the_filter_is_empty_without_an_agent(self):
+        self.cases = (LIB, IGNORED_TEST)
+        result = self.drive("integration", "--filter", "test(zzz)")
+        self.assertIgnoredOutsideTheFilterIsEmpty(result)
+
+    def test_a_selection_holding_a_test_lists_once_and_posts_that_list(self):
+        """The common case: a selection with a matching test beside an
+        ignored one is listed once, with the run's own argv, and that list
+        is the one posted."""
+        self.cases = (LIB, TEST, IGNORED_TEST)
+        result = self.drive("integration", agent="rust-empty-ignored-beside")
+        lists = self.cargo_calls("nextest", "list")
+        self.assertEqual(len(lists), 1, self.where(result))
+        self.assertNotIn("--run-ignored", lists[0], f"lists={lists!r}")
+        self.assertNotIn("--run-ignored", self.cargo_calls("nextest", "run")[0])
+        self.assertFiledUnder(result, "integration")
+        posted = self.list_posts()
+        self.assertEqual(len(posted), 1, self.where(result))
+        cases = json.loads(posted[0]["data"])["rust-suites"]["kinds::it"]["testcases"]
+        self.assertEqual(cases["slow_integration"]["filter-match"],
+                         {"status": "mismatch", "reason": "ignored"}, f"cases={cases!r}")
+        self.assertEqual(cases["integration_adds"]["filter-match"],
+                         {"status": "matches"}, f"cases={cases!r}")
+
+    def test_an_ignored_only_tier_posts_the_runs_own_list(self):
+        """The rare case that is not empty: the `--run-ignored all` list only
+        decides; the list posted is the run's own."""
+        self.cases = (LIB, IGNORED_TEST)
+        result = self.drive("integration", agent="rust-empty-ignored-posted")
+        lists = self.cargo_calls("nextest", "list")
+        self.assertEqual([_values(argv, "--run-ignored") for argv in lists],
+                         [[], ["all"]], f"lists={lists!r}")
+        self.assertNotIn("--run-ignored", self.cargo_calls("nextest", "run")[0])
+        self.assertFiledUnder(result, "integration")
+        posted = self.list_posts()
+        self.assertEqual(len(posted), 1, self.where(result))
+        cases = json.loads(posted[0]["data"])["rust-suites"]["kinds::it"]["testcases"]
+        self.assertEqual(cases["slow_integration"]["filter-match"],
+                         {"status": "mismatch", "reason": "ignored"}, f"cases={cases!r}")
 
     def test_a_list_that_does_not_build_still_files_its_compile_failure(self):
         """Passes today: a list that exits non-zero is never an empty

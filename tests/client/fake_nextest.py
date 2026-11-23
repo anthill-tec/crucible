@@ -39,12 +39,20 @@ Knobs, all read from the environment:
                          (`--lib`, `--bins`, `--tests`, `--test <name>`)
                          build only the binaries they name, and the
                          `kind(<k>)` predicates of `-E` expressions select
-                         binaries by kind. A test outside the selection is
-                         listed as a mismatch (reason `expression`) and is
-                         not run. Every other `-E` predicate selects all, so
-                         `(kind(lib) | kind(bin)) & (test(x))` selects the
-                         lib and bin tests. Off by default: a fake whose
-                         cases name no kind on purpose keeps today's answer.
+                         binaries by kind, and its `test(<name>)`
+                         predicates select tests whose name holds `<name>`
+                         (`=<name>`: is it). A binary outside the selection
+                         is listed with no testcase and is not run; a test
+                         its `test(...)` does not select is listed as a
+                         mismatch (reason `expression`) and is not run. An
+                         ignored test is a mismatch (reason `ignored`)
+                         before any `test(...)` is read, unless the call
+                         carries `--run-ignored all`: then only the
+                         selection decides. Every other `-E` predicate
+                         selects all, so `(kind(lib) | kind(bin)) &
+                         (test(x))` selects the lib and bin tests named x.
+                         Off by default: a fake whose cases name no kind on
+                         purpose keeps today's answer.
 """
 
 import glob
@@ -128,6 +136,7 @@ def _stream_name(entry):
 
 
 _KIND_PREDICATE = re.compile(r"kind\(\s*([A-Za-z-]+)\s*\)")
+_TEST_PREDICATE = re.compile(r"(?<![\w-])test\(\s*([^()]*?)\s*\)")
 
 
 def expression_kinds(argv):
@@ -171,12 +180,57 @@ def kind_selected(entry, argv):
     return kinds is None or entry["kind"] in kinds
 
 
+def _expression_names(argv):
+    """The `test(...)` predicates of `argv`'s `-E` expressions, or None
+    when they name none (every test is selected)."""
+    names = []
+    for i, arg in enumerate(argv[:-1]):
+        if arg in ("-E", "--filterset", "--filter-expr"):
+            names.extend(_TEST_PREDICATE.findall(argv[i + 1]))
+    return names or None
+
+
+def name_selected(entry, argv):
+    """Whether `entry`'s name is selected by `argv`'s `-E` `test(...)`
+    predicates (always, unless FAKE_NEXTEST_KINDS=1)."""
+    if argv is None or not honours_kinds():
+        return True
+    names = _expression_names(argv)
+    if names is None:
+        return True
+    return any(entry["name"] == name[1:] if name.startswith("=")
+               else name.lstrip("~") in entry["name"] for name in names)
+
+
+def selected(entry, argv):
+    """Whether a run of `argv` runs `entry`: its binary and its name are
+    both selected."""
+    return kind_selected(entry, argv) and name_selected(entry, argv)
+
+
+def _filter_match(entry, argv):
+    """The `filter-match` nextest lists `entry` under, as real nextest
+    0.9.130 orders it under FAKE_NEXTEST_KINDS=1: an ignored test is
+    `ignored` before the expression is read, unless the list carries
+    `--run-ignored all`."""
+    ignored = entry["status"] == "ignored"
+    if not honours_kinds():
+        return {"status": "mismatch", "reason": "ignored"} if ignored else {"status": "matches"}
+    if ignored and option(argv or [], "--run-ignored") != "all":
+        return {"status": "mismatch", "reason": "ignored"}
+    if not name_selected(entry, argv):
+        return {"status": "mismatch", "reason": "expression"}
+    return {"status": "matches"}
+
+
 def list_text(cases, argv=None):
     """`cargo nextest list --message-format json` for `cases`: an ignored
-    test is listed as a mismatch (reason `ignored`), a test whose binary kind
-    the call's `-E` does not select as a mismatch (reason `expression`, under
-    FAKE_NEXTEST_KINDS=1), every other test as a match."""
+    test is listed as a mismatch (reason `ignored`), every other test as a
+    match. Under FAKE_NEXTEST_KINDS=1 the call's selection is honoured as
+    the module docstring states: a binary it does not select is listed with
+    no testcase, and `test-count` counts the testcases listed."""
     suites = {}
+    listed = 0
     for entry in cases:
         binary_id = _binary_id(entry)
         suite = suites.setdefault(binary_id, {
@@ -187,21 +241,18 @@ def list_text(cases, argv=None):
             "binary-path": f"/fake/target/debug/deps/{entry['binary']}-0",
             "build-platform": "target", "cwd": f"/fake/{entry['crate']}",
             "status": "listed", "testcases": {}})
-        ignored = entry["status"] == "ignored"
         if not kind_selected(entry, argv):
-            match = {"status": "mismatch", "reason": "expression"}
-        elif ignored:
-            match = {"status": "mismatch", "reason": "ignored"}
-        else:
-            match = {"status": "matches"}
+            continue
+        listed += 1
         suite["testcases"][entry["name"]] = {
-            "kind": "test", "ignored": ignored, "filter-match": match}
+            "kind": "test", "ignored": entry["status"] == "ignored",
+            "filter-match": _filter_match(entry, argv)}
     return json.dumps({
         "rust-build-meta": {"target-directory": "/fake/target",
                             "base-output-directories": ["debug"],
                             "non-test-binaries": {}, "build-script-out-dirs": {},
                             "linked-paths": [], "platforms": {}, "target-platforms": []},
-        "test-count": len(cases), "rust-suites": suites})
+        "test-count": listed, "rust-suites": suites})
 
 
 def _fixture(name):
@@ -313,7 +364,7 @@ def streamed_run(argv, cases, before_case=None, empty_exit=None, silent=False):
                f"{STREAM_VARIABLE}=1 to enable it")
         return 95
     profile = option(argv, "-P") or option(argv, "--profile") or "default"
-    cases = [entry for entry in cases if kind_selected(entry, argv)]
+    cases = [entry for entry in cases if selected(entry, argv)]
     fixture = _fixture("stream.jsonl")
     if fixture is not None:
         sys.stdout.write(fixture)

@@ -652,6 +652,9 @@ _STREAM_FLAGS = ("--message-format", "libtest-json-plus",
 #: Where a run keeps its stream and its list, in its own reports directory.
 _STREAM_FILE = "nextest-stream.jsonl"
 _LIST_FILE = "nextest-list.json"
+#: Where the list that decides an ignored test's place in a selection is
+#: kept: beside the run's own list, never posted in its place.
+_RUN_IGNORED_LIST_FILE = "nextest-list-run-ignored.json"
 #: The instrumented build's own target directory, under the target root.
 _COVERAGE_TARGET_DIR = "llvm-cov-target"
 #: How long the relay's `finish` may take once the runner exited, and once a
@@ -1415,8 +1418,9 @@ def _test_run(args, tier, kinds, profile, project_dir, identity):
     A kind-filter selection (`kinds`) is listed first, on both paths and
     before any run is opened: a list naming no test it selects is refused
     (`tier-selection-empty`), and the list is handed on to the streamed run,
-    so the crate is listed once. A list that fails is never an empty
-    selection: the run goes on as before."""
+    so the crate is listed once. Only a list whose sole tests are ignored is
+    followed by a second, deciding one (`_selection_empty`). A list that
+    fails is never an empty selection: the run goes on as before."""
     # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
     # runs THIS body, so the envelope must carry the verb the caller actually
     # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
@@ -1440,12 +1444,14 @@ def _test_run(args, tier, kinds, profile, project_dir, identity):
             with _axi().abandon_trap(None):
                 listed, list_timing = _list_selection(project_dir, selection, env,
                                                       own_dir)
+                empty = (listed.returncode == 0
+                         and _selection_empty(project_dir, selection, env,
+                                              own_dir, list_timing))
         except _axi().RunAbandoned as abandoned:
             return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                              args.agent, None, abandoned, [],
                                              post_fn=_post)
-        if (listed.returncode == 0
-                and _listed_nothing(os.path.join(own_dir, _LIST_FILE))):
+        if empty:
             return _refuse_tier_run(
                 verb, project_dir, args.agent,
                 _empty_selection_refusal(tier, kinds, args.filter),
@@ -1595,22 +1601,47 @@ def _selection_expression(kinds, user_filter):
     return kinds or user_filter or None
 
 
-def _list_selection(project_dir, selection, env, own_dir):
-    """`cargo nextest list` over the run's exact selection, its JSON written
-    to the run's own list file, inside a `ChildRunTiming` bracket whose
-    figures the run folds into its own: `(listed, timing)`."""
+def _list_selection(project_dir, selection, env, own_dir, list_file=_LIST_FILE):
+    """`cargo nextest list` over `selection`, its JSON written to
+    `list_file` in the run's own directory (by default the run's own list
+    file), inside a `ChildRunTiming` bracket whose figures the run folds into
+    its own: `(listed, timing)`."""
     list_cmd = ["cargo", "nextest", "list", "--message-format", "json", *selection]
     with _axi().ChildRunTiming() as timing:
         print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
         listed = _run_logged(list_cmd, project_dir, env, None, capture=True,
-                             stdout_path=os.path.join(own_dir, _LIST_FILE))
+                             stdout_path=os.path.join(own_dir, list_file))
     return listed, timing
 
 
-def _listed_nothing(list_path):
-    """Whether the nextest list at `list_path` names no test its selection
-    matches and none that only `#[ignore]` keeps out. A list that cannot be
-    read is not an empty selection."""
+def _selection_empty(project_dir, selection, env, own_dir, list_timing):
+    """Whether the run's own list (already written, and built) names no
+    test its selection holds.
+
+    nextest lists an ignored test as `ignored` before it reads the
+    selection's expression, so a list with no match but an ignored test
+    cannot say whether the selection holds it. Only then the selection is
+    listed once more with `--run-ignored all`, which lists every test by the
+    selection alone. That list only decides: it is kept in its own file and
+    never handed on, and its time is folded into `list_timing`. A list that
+    fails or cannot be read is never an empty selection."""
+    named = _listed_tests(os.path.join(own_dir, _LIST_FILE))
+    if named != (False, True):
+        return named == (False, False)
+    again, timing = _list_selection(project_dir, [*selection, "--run-ignored", "all"],
+                                    env, own_dir, _RUN_IGNORED_LIST_FILE)
+    list_timing.wall += timing.wall
+    list_timing.cpu += timing.cpu
+    if again.returncode != 0:
+        return False
+    named = _listed_tests(os.path.join(own_dir, _RUN_IGNORED_LIST_FILE))
+    return named is not None and not named[0]
+
+
+def _listed_tests(list_path):
+    """What the nextest list at `list_path` names, as `(matching, ignored)`:
+    whether a testcase's `filter-match` is `matches`, and whether one is a
+    mismatch for its `#[ignore]` alone. None when the list cannot be read."""
     try:
         with open(list_path, encoding="utf-8") as handle:
             listed = json.load(handle)
@@ -1618,16 +1649,22 @@ def _listed_nothing(list_path):
         print(f"[crucible] WARN: the test list {list_path} could not be read "
               f"({error}); the selection is not checked for emptiness",
               file=sys.stderr)
-        return False
+        return None
+    matches = list(_filter_matches(listed))
+    return (any(m.get("status") == "matches" for m in matches),
+            any(m.get("status") == "mismatch" and m.get("reason") == "ignored"
+                for m in matches))
+
+
+def _filter_matches(listed):
+    """(PURE) Each testcase's `filter-match` in a parsed nextest list, `{}`
+    for one that carries none."""
     suites = listed.get("rust-suites") if isinstance(listed, dict) else None
-    for suite in (suites or {}).values() if isinstance(suites, dict) else ():
+    for suite in suites.values() if isinstance(suites, dict) else ():
         cases = suite.get("testcases") if isinstance(suite, dict) else None
-        for case in (cases or {}).values() if isinstance(cases, dict) else ():
+        for case in cases.values() if isinstance(cases, dict) else ():
             match = case.get("filter-match") if isinstance(case, dict) else None
-            match = match if isinstance(match, dict) else {}
-            if match.get("status") == "matches" or match.get("reason") == "ignored":
-                return False
-    return True
+            yield match if isinstance(match, dict) else {}
 
 
 def _empty_selection_refusal(tier, kinds, user_filter):
