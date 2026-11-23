@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
 """Run one client as its own process on short cadences — a test-only launcher.
 
 A test that drives a REAL client as an OS process cannot reach the client's
@@ -28,6 +32,10 @@ where it was spawned, exactly as it does when spawned directly. Then it:
 
 Each value must be at or above the safe minimum the suite allows for that
 interval; a shorter one is refused before the client is loaded.
+
+Like every client, it opens with an inline script-metadata header (`# ///
+script`, standard library only), so `uv run` runs it as a standalone script:
+no project is built and no network is needed, as in a hermetic run.
 
 The launcher imports nothing from `tests.client` (it runs with the client's
 directory, not the suite's, on its path), and its file name does not start
