@@ -412,11 +412,17 @@ def _unit_check_refusal(path, detail):
 
 def resolve_unit_check_declaration():
     """The declared unit-check as `{"command", "name"}`, or None when no
-    `[unit-check]` table is declared. Raises `LintRefused`, naming the file
-    and the field, for a malformed table."""
-    path, table = _core._read_project_config(UNIT_CHECK_TABLE)
-    if not table:
+    `unit-check` key is declared at all. Raises `LintRefused`, naming the
+    file and the field, for a malformed table -- an empty table, or a
+    `unit-check` key that is not a table, is declared and so refused."""
+    path, table = _core._read_project_config(UNIT_CHECK_TABLE, raw=True)
+    if table is None:
         return None
+    if not isinstance(table, dict):
+        raise LintRefused(
+            f"in {path}, `{UNIT_CHECK_TABLE}` is {table!r}, not a table "
+            f"-- write it as a [{UNIT_CHECK_TABLE}] table with `command = "
+            f"[\"scripts/unit-check.sh\"]`, and an optional string `name`")
     command = table.get("command")
     if not isinstance(command, list):
         raise _unit_check_refusal(path, f"`command` is {command!r}, not a list")
