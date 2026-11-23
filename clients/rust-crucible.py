@@ -2881,15 +2881,14 @@ def _add_reports_arg(p):
 # BDD form, so those cells are DECLARED, and the surface a cargo project has
 # for naming a run of its own is a nextest profile.
 def _add_declared_tier_args(p):
-    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
-    siblings (`unit`/`integration`/`e2e`) already take, so the instruction a
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the cargo run flags its
+    test-running siblings (`unit`/`integration`) take, so the instruction a
     refusal gives can actually be typed (AC14b).
 
-    `--profile` is deliberately NOT here where those three carry it: on a
-    declared cell the profile IS the declaration, read from
-    `.config/nextest.toml` by the tier's own name, and a flag that could point
-    somewhere else would be a second source of truth for the one fact this
-    cell exists to detect."""
+    It takes no `--profile`: on a declared cell the profile IS the
+    declaration, read from `.config/nextest.toml` by the tier's own name, and
+    a flag that could point somewhere else would be a second source of truth
+    for the one fact this cell exists to detect."""
     _add_cargo_tier_run_args(p)
 
 

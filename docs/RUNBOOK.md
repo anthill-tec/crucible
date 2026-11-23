@@ -450,19 +450,22 @@ its declaration.
 2. With no `--profile`, `ci` when `[profile.ci]` is declared.
 3. Otherwise `default`. It is passed explicitly, so a `NEXTEST_PROFILE` in the environment changes nothing.
 
-An `.config/nextest.toml` that does not parse is refused, naming the file. It is never filed as a compile failure.
+An `.config/nextest.toml` that does not parse is refused, naming the file. So is one that is not UTF-8, and one
+whose `profile` key is not the `[profile]` table. It is never filed as a compile failure.
 A project's `[targets.<profile>]` entry is checked against the profile the chain picked.
 
 **Without a `default-filter`, nextest's built-in `default` profile runs everything the kind filter selects.** On a
 crate with a docker tier in `tests/`, `integration` under `default` includes it. Declare `[profile.ci]` (or
 `[profile.integration]`) with a `default-filter` that leaves the docker tier out.
 
-**An empty selection is refused.** Before any run opens, the verb lists its selection once with `cargo nextest
-list`. When the list names no test the selection matches, and none that is only `#[ignore]`d, the answer is
+**An empty selection is refused.** Before any run opens, the verb lists its selection with `cargo nextest list`.
+When the list names no test the selection matches, and no `#[ignore]`d test the selection holds, the answer is
 `ok: false` with code `tier-selection-empty`, naming the tier, the kind filter, any `--filter`, and the
-`[profile.<tier>]` that would replace it. Nothing is opened or filed. A tier whose only tests are ignored is not
-empty. A list that fails to build is not an empty selection: the run goes on, and files the compile failure as
-before.
+`[profile.<tier>]` that would replace it. No run is opened and nothing is filed. Nextest lists an ignored test as
+ignored even when `--filter` leaves it out, so a list whose only tests are ignored is followed by a second one
+with `--run-ignored all`, which only decides whether the selection holds them. A tier whose only tests are
+ignored is not refused, and nextest then answers "no tests to run". A list that fails to build is not an empty
+selection: the run goes on and, with `--agent`, files the compile failure as before.
 
 **`e2e`, `module` and `bdd` are declared-only.** Each runs `-P <tier>` when `[profile.<tier>]` is declared, and
 answers `tier-run-undeclared` otherwise. `e2e` takes no `--profile`.
