@@ -453,6 +453,16 @@ class _SharedParsingCases(_UnitCheckDrive):
         self.assertIn(DECLARED_NAME, self.help_and_detail(axi),
                       f"the declared name names the stage; {why}")
 
+    def test_a_declared_names_help_line_names_the_command_as_well(self):
+        path = self.failing_unit_check()
+        result, axi = self.drive_gate(self.declared_project(path, name=DECLARED_NAME))
+        why = self.why(result, axi)
+        self.assertStoppedAtUnitCheck(result, axi, why)
+        self.assertTrue(any(DECLARED_NAME in str(step) and str(path) in str(step)
+                            for step in axi.get("help") or []),
+                        f"one help line names the stage and the command's first "
+                        f"word; {why}")
+
     def test_without_a_name_the_commands_basename_names_the_stage_in_the_abort(self):
         path = self.failing_unit_check()
         result, axi = self.drive_gate(self.declared_project(path))
