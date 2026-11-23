@@ -23,7 +23,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
 ### Added
 
 - **A gate runs the project's declared unit check.** A project may declare a `[unit-check]` table in its
-  `crucible.toml` (`command`, a non-empty list of strings, and an optional `name`). Every client's
+  `crucible.toml` (`command`, a non-empty list of non-empty strings, and an optional `name`). Every client's
   `pre-merge-gate` runs it right after its lint stage, in lint's directory, with the gate's environment
   unchanged. A non-zero exit stops the gate at `stage: unit-check` with a `unit-check-gate-abort` warning, the
   command's output on stderr, and no regression run. With no table the gate goes on, warning

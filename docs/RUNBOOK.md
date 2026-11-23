@@ -426,8 +426,8 @@ tests.
 
 A project may declare a unit-check stage for its gate, in a `[unit-check]` table of the same `crucible.toml`. Each
 client's `pre-merge-gate` runs it right after its lint stage, in the directory lint ran in (bun: its package
-directory), and before the regression: after lint in python, bun and arduino, before the regression in rust and go,
-and before docker-up in maven.
+directory). It runs after lint and before the gate's next stage: the tests in python, bun, arduino, rust and go;
+docker-up in maven.
 
 ```toml
 [unit-check]
