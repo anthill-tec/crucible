@@ -3,8 +3,8 @@
 **Status:** PENDING.
 
 - Filed 2026-11-21 from todo #27.
-- Revised 2026-11-23 after the gap analysis and the user's rulings M1–M11, recorded in
-  `test-reports/work/cr268-gap-analysis.md`.
+- Revised 2026-11-23 after the gap analysis and the user's rulings M1–M11, recorded in the gap
+  analysis.
 - The user ruled that `settings.xml` profiles are accepted, and approved the spec on 2026-11-23.
 
 | Field | Value |
