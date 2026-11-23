@@ -205,7 +205,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-271](CR-CRU-271-the-testpypi-version-check-derives-the-version-it-checks.md) | the TestPyPI version check derives the version it checks | maintenance | COMPLETED | 266 | 9 (0.5.0) |
 | [CR-CRU-272](CR-CRU-272-the-board-ui-and-clients-take-their-intervals-as-settings.md) | the board UI and the clients take their intervals as settings | maintenance | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-273](CR-CRU-273-time-ordered-reads-break-ties-by-insertion-order.md) | time-ordered reads break ties by insertion order | bugfix | COMPLETED | — | 9 (0.5.0) |
-| [CR-CRU-274](CR-CRU-274-the-local-gate-checks-the-unit-tiers-as-ci-does.md) | the local gate checks the unit tiers as CI does | maintenance | PENDING | — | 9 (0.5.0) |
+| [CR-CRU-274](CR-CRU-274-the-local-gate-checks-the-unit-tiers-as-ci-does.md) | the local gate checks the unit tiers as CI does | maintenance | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | COMPLETED | 152, 206 | 8 (0.4.0) |
 | [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | COMPLETED | 200 | 8 (0.4.0) |
 | [CR-CRU-202](CR-CRU-202-a-rust-run-streams-its-tests-through-nextest.md) | a rust run streams its tests through nextest | feature | COMPLETED | 200 | 8 (0.4.0) |
