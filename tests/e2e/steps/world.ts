@@ -43,6 +43,17 @@ export const test = base.extend<{ world: World; seededProjectTeardown: void }>({
     },
     { auto: true },
   ],
+  // Every scenario's page drops its routes at teardown, before Playwright
+  // closes it. A route mock still fetching when its scenario ends (the
+  // live-run mock's `route.fetch()`) would otherwise fail a scenario that had
+  // already passed with "route.fetch: Test ended"; `ignoreErrors` swallows
+  // only what such an in-flight handler throws from here on. The built-in
+  // `page` is wrapped rather than an auto fixture added, so a scenario that
+  // never opens a page still never makes one.
+  page: async ({ page }, use) => {
+    await use(page);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  },
 });
 
 // `After` is a SCENARIO-scoped hook (playwright-bdd's own), exported from the
