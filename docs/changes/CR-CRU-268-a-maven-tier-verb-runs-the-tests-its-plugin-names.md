@@ -1,6 +1,6 @@
 # CR-CRU-268 — a maven tier verb runs the tests its plugin names
 
-**Status:** PENDING.
+**Status:** COMPLETED (2026-11-23).
 
 - Filed 2026-11-21 from todo #27.
 - Revised 2026-11-23 after the gap analysis and the user's rulings M1–M11, recorded in the gap
@@ -98,7 +98,7 @@ exits and before anything is filed, on both paths. A selection is empty when eit
 
 - Maven exits 0 and the reports the verb reads hold no test case. This includes a project without failsafe, where
   `integration` answers empty and the message names failsafe;
-- Maven fails, and its console carries surefire's or failsafe's "No tests matching pattern" message.
+- Maven fails, and its console carries surefire's or failsafe's "No tests matching pattern" message, and the reports hold no test case. In a reactor, one module's unmatched pattern never empties a run in which another module ran tests.
 
 What an empty selection does:
 
@@ -188,3 +188,23 @@ record.
 - Refusing an empty selection before Maven runs. This was declined: it costs about 1 s per run and is approximate.
 - Per-tier gate or `regression` runs (R5 and R6).
 - Model B's agent and skill wording.
+
+## Close-out
+
+Closed 2026-11-23. Board plan 274 ran these cycles:
+
+| Cycle | Kind | What happened |
+|---|---|---|
+| 1016 | RED+GREEN | RED `a29ccf3d` (a new behaviour module of 43 tests, a lifecycle-aware fake `mvn`, a real-Maven failsafe fixture, setup-only migrations, two source-scan tests deleted); GREEN `be44b6b2`, `3f017000` |
+| 1017 | VERIFY | CHANGES: a reactor's unmatched module emptied a run that ran tests; `bdd` help and refusal; two assertions that could not fail; stale docstrings; wrong advice on a declared tier |
+| 1018 | FIX | `0aa5b795..0a93212e`, all findings fixed; S7's second bullet narrowed as worded above |
+| 1019 | FIX | `4976ef3a`: four bun tests that still ran undeclared `module` and `e2e` declare their profiles (setup only) |
+| 1020 | FIX | the re-gate, after a power outage cut off the first |
+
+**Pre-merge gate, cycle 1020:** 13,370 passed and 0 failed, in 1,362.8 s.
+
+| Suite | Results |
+|---|---|
+| bun | 5,078 |
+| python unit | 2,624 |
+| python integration | 5,668 |
