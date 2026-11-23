@@ -430,6 +430,18 @@ class _SharedParsingCases(_UnitCheckDrive):
                              "fixture guard: the project declares the key as written")
         self.assertRefusedNaming(root, "`unit-check` is 'x', not a table")
 
+    def test_a_command_that_is_not_found_stops_the_gate_at_its_stage_with_an_error(self):
+        missing = self.scratch / "no-such-unit-check"
+        result, axi = self.drive_gate(self.unit_check_project(command=[str(missing)]))
+        why = self.why(result, axi)
+        self.assertStoppedAtUnitCheck(result, axi, why)
+        self.assertEqual(axi.get("exit"), 1,
+                         f"a command not found stops the gate with exit 1; {why}")
+        error = axi.get("error")
+        self.assertIsInstance(error, str, f"the stop is an error; {why}")
+        self.assertIn(repr(str(missing)), str(error),
+                      f"the error names the command not found; {why}")
+
     def test_a_declared_name_names_the_stage_in_the_abort(self):
         path = self.failing_unit_check()
         result, axi = self.drive_gate(self.declared_project(path, name=DECLARED_NAME))
