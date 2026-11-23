@@ -358,7 +358,11 @@ class _SharedParsingCases(_UnitCheckDrive):
     """The table's parsing and the stage's name: shared code, driven through
     one client."""
 
-    def assertRefusedNaming(self, root, field):
+    def assertRefusedNaming(self, root, says):
+        """The gate refused the declaration: its `error` names the file and
+        says `says`, the text naming the offending field and what is wrong
+        with it -- never a word the refusal's remedy hint holds whatever the
+        field."""
         result, axi = self.drive_gate(root)
         why = self.why(result, axi)
         self.assertStoppedAtUnitCheck(result, axi, why)
@@ -366,42 +370,47 @@ class _SharedParsingCases(_UnitCheckDrive):
         self.assertIsInstance(error, str, f"the refusal is an error; {why}")
         self.assertIn("crucible.toml", str(error),
                       f"the refusal names the file declaring the table; {why}")
-        self.assertRegex(str(error), rf"\b{field}\b",
-                         f"the refusal names the `{field}` field; {why}")
+        self.assertIn(says, str(error),
+                      f"the refusal names the field and what is wrong with it; {why}")
         self.assertEqual(self.unit_check_calls(), [],
                          f"a refused declaration runs nothing; {why}")
 
     def test_a_table_without_command_is_refused_naming_the_file_and_command(self):
         self.unit_check()
-        self.assertRefusedNaming(self.unit_check_project(name=DECLARED_NAME), "command")
+        self.assertRefusedNaming(self.unit_check_project(name=DECLARED_NAME),
+                                 "`command` is None, not a list")
 
     def test_a_command_that_is_not_a_list_is_refused_naming_the_file_and_command(self):
         path = self.unit_check()
-        self.assertRefusedNaming(self.unit_check_project(command=str(path)), "command")
+        self.assertRefusedNaming(self.unit_check_project(command=str(path)),
+                                 f"`command` is {str(path)!r}, not a list")
 
     def test_an_empty_command_is_refused_naming_the_file_and_command(self):
         self.unit_check()
-        self.assertRefusedNaming(self.unit_check_project(command=[]), "command")
+        self.assertRefusedNaming(self.unit_check_project(command=[]),
+                                 "`command` is an empty list")
 
     def test_a_command_with_an_empty_entry_is_refused_naming_the_file_and_command(self):
         path = self.unit_check()
-        self.assertRefusedNaming(self.unit_check_project(command=[str(path), ""]),
-                                 "command")
+        command = [str(path), ""]
+        self.assertRefusedNaming(self.unit_check_project(command=command),
+                                 f"`command` {command!r} holds an empty or non-string entry")
 
     def test_a_command_with_a_non_string_entry_is_refused_naming_the_file_and_command(self):
         path = self.unit_check()
-        self.assertRefusedNaming(self.unit_check_project(command=[str(path), 3]),
-                                 "command")
+        command = [str(path), 3]
+        self.assertRefusedNaming(self.unit_check_project(command=command),
+                                 f"`command` {command!r} holds an empty or non-string entry")
 
     def test_an_empty_name_is_refused_naming_the_file_and_name(self):
         path = self.unit_check()
         self.assertRefusedNaming(self.unit_check_project(command=[str(path)], name=""),
-                                 "name")
+                                 "`name` is '', not a non-empty string")
 
     def test_a_non_string_name_is_refused_naming_the_file_and_name(self):
         path = self.unit_check()
         self.assertRefusedNaming(self.unit_check_project(command=[str(path)], name=7),
-                                 "name")
+                                 "`name` is 7, not a non-empty string")
 
     def test_a_declared_name_names_the_stage_in_the_abort(self):
         path = self.failing_unit_check()
