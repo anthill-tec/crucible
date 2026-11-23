@@ -1,6 +1,5 @@
-// With no setting given, the board's shell and its stream run today's
-// intervals — each value OBSERVED on running production code, never read off
-// its source text:
+// With no setting given, the board's shell runs today's intervals — each
+// value OBSERVED on running production code, never read off its source text:
 //
 //   - the shell's timers: a `setInterval` spy installed once happy-dom has
 //     registered and before app.js evaluates records, for a mount with no
@@ -10,17 +9,21 @@
 //     at 5000;
 //   - the silence window: with the clock pinned at T0 before the mount, the
 //     watchdog reads nothing at T0 + 20 000 and reads `/api/v2/health` at
-//     T0 + 20 001;
-//   - the stream keep-alive: an in-process `createBoard` answering
-//     `/api/stream` arms its keep-alive at 15 000.
+//     T0 + 20 001.
 //
-// In process: happy-dom in this process, the board's router through its own
-// `fetch`, no socket, no spawn. No timer the shell arms ever runs: the
-// interval spy only records, and the watchdog is invoked by the test on a
-// clock it moves itself.
+// WHY INTEGRATION: the shell mounts in happy-dom, and happy-dom itself arms a
+// real 1 ms timer whenever a window is built and whenever it is torn down
+// (its AsyncTaskManager's `resolveWhenComplete`, on a timer reference it
+// captures privately when it loads). A unit test takes no wait on real time
+// above 0 ms, so a happy-dom mount is integration. The stream's keep-alive
+// needs no window and stays a unit test, in
+// tests/unit/the-stream-runs-its-default-keep-alive.test.ts.
+//
+// In process: happy-dom in this process, no socket, no spawn. No timer the
+// shell asks for ever runs: the interval spy only records, the timeout spy
+// arms only the 0 ms render steps, and the watchdog is invoked by the test on
+// a clock it moves itself.
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { createBoard } from "../../src/server.ts";
-import { Store, type LiveFrameScheduler } from "../../src/store.ts";
 import { mountUi, settleReads, uiFetchLog, unmountUi } from "../helpers/ui-mount";
 
 const teardowns: Array<() => void | Promise<void>> = [];
@@ -46,12 +49,19 @@ function recordIntervals(): Recorded[] {
   return recorded;
 }
 
-/** Record every `setTimeout` the window is asked for, still arming it (renders run at 0 ms). */
+/** Record every `setTimeout` the window is asked for. Only a 0 ms one — a
+ *  render step — is armed; a timer above 0 ms is recorded and never armed,
+ *  so no real wait is taken and nothing it was handed ever runs. */
 function recordTimeouts(): Recorded[] {
   const recorded: Recorded[] = [];
   const real = globalThis.setTimeout;
-  const spy = spyOn(globalThis, "setTimeout").mockImplementation(((fn: Recorded["fn"], ms: number, ...rest: unknown[]) => {
-    recorded.push({ fn, ms });
+  let handle = 0;
+  const spy = spyOn(globalThis, "setTimeout").mockImplementation(((fn: Recorded["fn"], ms?: number, ...rest: unknown[]) => {
+    recorded.push({ fn, ms: ms ?? 0 });
+    if (typeof ms === "number" && ms > 0) {
+      handle += 1;
+      return handle;
+    }
     return real(fn as () => void, ms, ...rest);
   }) as unknown as typeof setTimeout);
   teardowns.push(() => spy.mockRestore());
@@ -167,36 +177,5 @@ describe("the shell runs today's intervals when none is given", () => {
     await watchdogTick();
     await settleReads();
     expect(uiFetchLog.slice(pastWindow)).toEqual(["/api/v2/health"]);
-  });
-});
-
-/** A clock and a timer the test owns: nothing it arms ever fires on its own. */
-class ManualScheduler implements LiveFrameScheduler {
-  now = (): number => 1_800_000_000_000;
-  setTimeout = (): number => 1;
-  clearTimeout = (): void => undefined;
-}
-
-describe("the board's stream runs today's keep-alive when none is given", () => {
-  test("an in-process board answering /api/stream arms its keep-alive at 15000", async () => {
-    const store = Store.open(":memory:", { scheduler: new ManualScheduler() });
-    const board = createBoard({
-      store,
-      storeResolution: { path: ":memory:", rule: "explicit" },
-      listener: () => null,
-    });
-    teardowns.push(() => board.stop());
-    const recorded = recordIntervals();
-    spyOn(globalThis, "clearInterval").mockImplementation((() => undefined) as typeof clearInterval);
-    teardowns.push(() => (globalThis.clearInterval as unknown as { mockRestore(): void }).mockRestore());
-
-    const res = await board.fetch(new Request("http://board.invalid/api/stream"));
-    expect(res.status).toBe(200);
-    const reader = res.body!.getReader();
-    const first = new TextDecoder().decode((await reader.read()).value);
-    expect(first.startsWith('data: {"type":"hello"')).toBe(true);
-
-    expect(recorded.map((call) => call.ms)).toEqual([15_000]);
-    await reader.cancel();
   });
 });

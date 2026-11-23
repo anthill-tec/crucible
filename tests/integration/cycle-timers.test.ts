@@ -814,7 +814,7 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
 // the tick's re-derivation of the badge — a condition with a 1 s deadline,
 // never a real wait on the 10 s cadence. The cadence bounds (>= 9 s, <= 15 s)
 // are asserted on the clock the test moved. The production 10 s value itself
-// is observed in tests/unit/the-shell-and-the-stream-run-their-default-intervals.test.ts.
+// is observed in tests/integration/the-shell-runs-its-default-intervals.test.ts.
 const SHORT_CYCLE_TICK: UiIntervals = { cycleTickMs: 200 };
 const TICK_TEST_TIMEOUT_MS = 5_000;
 
