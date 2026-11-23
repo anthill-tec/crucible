@@ -14,30 +14,48 @@ Java sibling of rust-crucible.py. Tool-specific (Maven / Surefire / Failsafe /
 JUnit-XML / JaCoCo), NOT project-specific — the project path + maven dir are
 parameterizable, nothing is hardcoded.
 
-The four test tiers (the differentiation this script encodes):
-  unit        Targeted surefire run of ONE class/method — the RED/GREEN cycle
-              level. `mvn clean test -Dtest=<pattern>`. No coverage.
-  module      A whole module's surefire suite (reactor `-pl <module> [-am]`),
-              or the single-module service's full unit suite. `mvn clean test`.
-              No coverage.
-  e2e         Failsafe integration tests (`*IT.java` / @QuarkusIntegrationTest),
-              optionally `-Dnative`. `mvn clean verify` (or `failsafe:integration-
-              test` against a prebuilt package). No coverage.
+The test tiers (the differentiation this script encodes). A `pom.xml` profile
+whose id is the tier takes its verb over: `mvn clean test -P<tier>` for unit
+and module, `mvn clean verify -P<tier>` for the rest, filing every surefire
+and failsafe report the run wrote. None takes coverage.
+  unit        Surefire's tests — the RED/GREEN cycle level. `mvn clean test`,
+              with `-Dtest=<pattern>` only under --test.
+  module      One reactor module's surefire suite, `mvn clean test -pl
+              <module> [-am]`. With neither --module nor a declared `module`
+              profile it refuses (tier-run-undeclared).
+  integration Failsafe's integration tests alone: `mvn clean verify
+              -Dtest='!*' -Dsurefire.failIfNoSpecifiedTests=false`, filing only
+              failsafe's reports.
+  e2e, bdd    Declared-only: the tier's profile runs, `mvn clean verify
+              -P<tier>`, and with none the verb refuses (tier-run-undeclared).
+              `e2e --failsafe-only` runs `failsafe:integration-test
+              failsafe:verify -Pe2e` against a prebuilt package, filing only
+              the failsafe reports that run wrote.
   regression  Full reactor suite, coverage-free unless --coverage adds JaCoCo.
               `mvn clean verify` → surefire + failsafe reports (+ jacoco.csv
               with --coverage) sent to /api/v2/runs for the board to decode.
               pre-merge-gate always runs it with coverage.
 
+On unit, module, integration, e2e and bdd, `--profile` is refused before maven
+runs on a tier with a declared profile, and for an id that no pom.xml under
+the maven dir and no ~/.m2/settings.xml declares. A selection that ran no test
+is refused (tier-selection-empty) after maven exits, and nothing is filed.
+
 Subcommands:
   register, unregister  Agent lifecycle (heartbeat / remove).
-  unit                  mvn clean test -Dtest=<pattern> [-pl m]. Surefire ingest.
-                        Compile-fail → mvn test-compile → /api/v2/runs/compile.
-  module                mvn clean test [-pl <module> [-am]]. Surefire ingest.
+  unit                  mvn clean test [-Dtest=<pattern>] [-pl m]. Surefire
+                        ingest. Compile-fail → mvn test-compile →
+                        /api/v2/runs/compile.
+  module                mvn clean test -pl <module> [-am]. Surefire ingest.
+  integration           mvn clean verify -Dtest='!*'
+                        -Dsurefire.failIfNoSpecifiedTests=false. Failsafe ingest.
   compile               mvn clean test-compile [-pl m]. Ingest output to
                         /api/v2/runs/compile (RED-as-compile-fail path).
-  e2e                   mvn clean verify [-Dnative] [-pl m]  (or, with
-                        --failsafe-only, mvn failsafe:integration-test). Ingests
-                        failsafe (and surefire) results. No coverage. Optional docker.
+  e2e                   The declared `e2e` profile: mvn clean verify -Pe2e
+                        [-Dnative] [-pl m] (or, with --failsafe-only, mvn
+                        failsafe:integration-test failsafe:verify -Pe2e).
+                        Ingests failsafe and surefire results. Optional docker.
+  bdd                   The declared `bdd` profile: mvn clean verify -Pbdd.
   regression            mvn clean verify (whole reactor) → surefire + failsafe
                         (+ jacoco coverage only with --coverage) →
                         /api/v2/runs.
@@ -949,9 +967,9 @@ _UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
 
 def _run_surefire_tier(args, goal_extra, label, kinds=None):
     """Shared body for `unit` and `module`: `mvn clean test [...]`, then the
-    run's `kinds` reports filed under `label` (surefire's by default, or every
-    report a declared profile's run wrote). Surefire only, NEVER coverage.
-    The run's `[targets.<label>]` declaration is checked first."""
+    run's `kinds` reports filed under `label`: surefire's by default, or every
+    surefire and failsafe report a declared profile's run wrote. NEVER
+    coverage. The run's `[targets.<label>]` declaration is checked first."""
     _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
@@ -996,7 +1014,12 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, label, reports_dir)
-    # Reports older than this were not written by this run.
+    # Reports older than this were not written by this run. Whole seconds,
+    # rounded down, so a report written in the second before the run started
+    # can still count: real surefire and failsafe ignore the `-D` reports
+    # directory, so this check decides freshness, and a run without `clean`
+    # (`--failsafe-only`) follows a packaging step, not a test run in that
+    # same second.
     since = int(time.time()) if fresh_only else None
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting is measured here and says so in its
