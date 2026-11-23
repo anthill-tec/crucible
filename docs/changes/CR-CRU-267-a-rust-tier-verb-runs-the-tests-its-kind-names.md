@@ -1,6 +1,6 @@
 # CR-CRU-267 — a rust tier verb runs the tests its kind names
 
-**Status:** PENDING.
+**Status:** COMPLETED (2026-11-23).
 
 - Filed 2026-11-21 from todo #27.
 - Revised 2026-11-23 after:
@@ -100,7 +100,7 @@ This covers the undeclared selection only: S1's kind filter, with or without `--
 - It runs in `_test_run`, for `unit` and `integration` only, on both the agent path and the no-agent path.
 - It runs before any run is opened and before the plain run.
 - It is one `cargo nextest list --message-format json`, with the run's exact argv selection, run inside the
-  `ChildRunTiming` bracket (CR-CRU-111 §S4). The listed output is handed on, so the crate is not listed twice.
+  `ChildRunTiming` bracket (CR-CRU-111 §S4). The listed output is handed on, so the crate is not listed twice. The one exception: when that list holds no match but does hold ignored tests, a second list with `--run-ignored all` decides whether the selection is empty. It is never posted (FIX 1015, Mainline ruling).
 
 **When the selection is empty.**
 
@@ -265,3 +265,55 @@ is production code that runs.
 - **The other stacks:** maven is CR-CRU-268 and arduino is CR-CRU-269.
 - **Model B's agent and skill wording.** Crucible sends the switch set to Model B as a request once the stack CRs
   land.
+
+## Close-out
+
+Closed 2026-11-23. Board plan 273 ran three cycles: 1013 RED+GREEN, 1014 VERIFY, 1015 FIX.
+
+**Before the build.**
+- **Gap analysis:** the filed premise was wrong. The verbs already ran, but with `unit` too narrow, `integration` too
+  wide, the declaration ignored, and a hard-coded `ci`.
+- **User rulings:** R1–R8 from the gap analysis, and R9 (a typed `--profile` against a declared tier is refused)
+  from the pre-review.
+- **Pre-review:** CHANGES, folded as `c4d0bc32`.
+
+**Cycle 1013: RED and GREEN.**
+- **RED (`ce9f1622`):**
+  - a new behaviour module, 43 tests;
+  - the fake nextest learns kinds, behind `FAKE_NEXTEST_KINDS`;
+  - the listed tier tests are changed;
+  - nine source, AST and meta classes are deleted under the user's rule.
+- **GREEN (`35ee674c`, `5ef03526`):**
+  - `UNIT_KINDS` and `INTEGRATION_KINDS`;
+  - `_selection_expression`;
+  - `_resolve_tier_profile`, with the chain: an explicit flag, then a declared tier, then `ci`, then `-P default`;
+  - the pre-run list with `tier-selection-empty`;
+  - `e2e` unwired, so it is a declared cell;
+  - the RUNBOOK "Rust tier verbs" section, the `crucible.toml` comment and the CHANGELOG.
+- **Two older tests changed under Mainline rulings**, both consequences of S4 on both paths: the no-agent "lists
+  nothing" test, and the empty-list on every verb test.
+
+**Cycle 1014: VERIFY.** It found:
+- a vacuous test;
+- an ignored test outside `--filter` hiding an empty selection;
+- a config that is not UTF-8;
+- a non-table `profile` key filed as a compile failure.
+
+**Cycle 1015: FIX (`28cf7c58..c59c524a`).**
+- All four findings fixed.
+- The fake nextest made faithful to real nextest's ignored and kind-mismatch output.
+- S1 resolved by Mainline ruling: the second list happens only in the rare case.
+
+**Pre-merge gate, cycle 1015:** 13,317 passed and 0 failed, in 1,348.3 s.
+
+| Suite | Results |
+|---|---|
+| bun | 5,086 |
+| python unit | 2,625 |
+| python integration | 5,606 |
+
+**Mainline's real-crate check** (VERIFY 1014 and FIX 1015, cargo-nextest 0.9.130):
+- `unit` runs the lib and bin tests;
+- `integration` runs only `tests/`;
+- a crate with no `tests/` is refused with `tier-selection-empty`;
+- `--filter` with only an ignored test outside it is refused.

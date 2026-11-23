@@ -37,15 +37,10 @@ mvn/cargo/make/bun/arduino-cli is reachable from any drive in this file, and
 no request leaves the process: the client's `_post`/`_get`/`_patch` seam is
 recorded, so the live board on :3849 is never touched.
 
-HOW THE CELL COUNT IS DERIVED, and why it is not a frozen number:
-`TOOLCHAIN_SPLIT_CELLS` transcribes §S3's table ONCE, and every count in this
-file is computed from it — the number of split cells, the clients they span,
-and the set of cells this suite drives (each AC6 method carries a `cell`
-attribute, collected by introspection and compared against the matrix). AC6's
-own words are "the cell count is itself asserted — 'the client runs the tier'
-is satisfiable by one client, and that is the defect this AC exists to
-prevent", so a suite that quietly shrank to maven alone fails
-`SplitCellCoverageTest` rather than passing with four green cells.
+`TOOLCHAIN_SPLIT_CELLS` transcribes the split-cell table ONCE: the refusal
+probes below are driven from it. Rust's split cells are `unit` and
+`integration`, selected by nextest kind filters; rust `e2e` is a declared cell
+(`[profile.e2e]`), driven by `RustE2eIsADeclaredCellTest`.
 
 MEASURED ON `feature/CR-CRU-111` @ `5c14fc8` (cycles 377 and 378 merged),
 2026-09-08 — what is RED here and what is a PIN, stated per test, because a
@@ -112,7 +107,6 @@ colour means nothing:
          and its python twin — the converse bound: a patch that made every
          undeclared cell refuse by refusing WHOLESALE passes every refusal
          assertion above and fails these two.
-  PIN  `SplitCellCoverageTest` — the derived count and the coverage bound.
 
 HARNESS: cycle 378's `tests/client/integration/test_client_tier_stamping.py`, ADOPTED
 rather than re-invented — its `_ClientDriveCase` (importlib-load the
@@ -221,6 +215,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from tests.client.go_client_harness import (
@@ -284,17 +279,21 @@ AGENT = "CR-CRU-111-C3-modality-probe"
 #
 #   mvn      surefire (`*Test`) · surefire scoped to a reactor module
 #            (`-pl <m> -am`) · failsafe / `integration-test`
-#   rust     cargo target selection — `--lib` · `--test <t>` · nextest
-#            profiles (`-P ci`, `-P e2e`)
+#   rust     nextest kind filters — `kind(lib) | kind(bin) | kind(proc-macro)`
+#            · `kind(test)`; `e2e` is declared (`[profile.e2e]`)
 #   arduino  the native host `g++`/`make` build
 #
 # arduino's "(+ `integration` where the native build separates it)" is NOT
 # here — see ESCALATION 6.
 TOOLCHAIN_SPLIT_CELLS = {
     "mvn": ("unit", "module", "integration", "e2e"),
-    "rust": ("unit", "integration", "e2e"),
+    "rust": ("unit", "integration"),
     "arduino": ("unit",),
 }
+
+# Rust's kind filters, each the one `-E` element nextest is handed.
+RUST_UNIT_KINDS = "kind(lib) | kind(bin) | kind(proc-macro)"
+RUST_INTEGRATION_KINDS = "kind(test)"
 
 # ESCALATION 1 — the cells bun and python (the two clients whose toolchain
 # makes NO tier split, so §S3 says every cell is declared) ship no target for.
@@ -311,14 +310,6 @@ DECLARATION_TOKENS = {
     "mvn": ("pom.xml", "maven", "mvn", "profile"),
     "rust": ("cargo", "nextest"),
 }
-
-
-def _split_cells():
-    """§S3's split cells as `(client, tier)` pairs — the derived set every count
-    in this file is computed from."""
-    return frozenset((client, tier)
-                     for client, tiers in TOOLCHAIN_SPLIT_CELLS.items()
-                     for tier in tiers)
 
 
 # ── fake toolchains that RECORD what they were asked to run ────────────────
@@ -515,6 +506,7 @@ def tearDownModule():
 
 
 def _fake(name):
+    assert _BIN_DIR is not None, "setUpModule lays the fakes down first"
     return str(Path(_BIN_DIR) / name)
 
 
@@ -977,66 +969,51 @@ class MvnSplitCellsTest(_MvnModalityCase):
         self.assertIngestedTier(drive, "e2e", cell)
 
 
-MvnSplitCellsTest.test_the_unit_cell_runs_surefire_unscoped.cell = ("mvn", "unit")
-MvnSplitCellsTest.test_the_module_cell_runs_surefire_scoped_to_a_reactor_module.cell = (
-    "mvn", "module")
-MvnSplitCellsTest.test_the_integration_cell_runs_mavens_failsafe_lifecycle.cell = (
-    "mvn", "integration")
-MvnSplitCellsTest.test_the_e2e_cell_runs_the_failsafe_it_path.cell = ("mvn", "e2e")
-
-
 class RustSplitCellsTest(_RustModalityCase):
-    """AC6, cargo's three split cells — "cargo target selection — `--lib` ·
-    `--test <t>` · nextest profiles".
+    """Cargo's two split cells, selected by nextest kind filters: `unit`
+    is `kind(lib) | kind(bin) | kind(proc-macro)` and `integration` is
+    `kind(test)`, each one `-E` element, with no cargo target flag."""
 
-    RED — all three. `rust-crucible.py` hands the shared registrar an EMPTY
-    mapping, so every tier verb in this client is a refusal and cargo's own
-    selection is reachable only through the untiered `test` verb."""
-
-    def test_the_unit_cell_selects_cargos_lib_target(self):
-        """RED — §S3 maps rust's `unit` onto cargo's in-crate `--lib` target
-        (ESCALATION 7: the selector is real in cargo/nextest and absent from
-        this client). A `unit` run over the whole crate would include the
-        `tests/` integration targets, which is precisely the tier confusion
-        the split exists to prevent."""
+    def test_the_unit_cell_selects_the_lib_bin_and_proc_macro_kinds(self):
+        """RED — the client hands nextest `--lib`, which leaves out the
+        in-crate tests of bin and proc-macro targets."""
         cell = "rust/unit"
         drive = self.drive(self.rust_argv("unit", ["--crate", self.CRATE]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
-        self.assertSelects(runs, ["--lib"], cell,
-                           "cargo's own unit selection is `--lib`")
+        self.assertSelects(runs, ["-E", RUST_UNIT_KINDS], cell,
+                           "rust's unit selection is the lib, bin and proc-macro kinds")
+        self.assertDoesNotSelect(runs, "--lib", cell,
+                                 "`--lib` leaves out the bin and proc-macro tests")
         self.assertClosedFromItsStream(drive, cell)
         self.assertIngestedTier(drive, "unit", cell)
 
-    def test_the_integration_cell_selects_a_cargo_test_target(self):
-        """RED — §S3 maps `integration` onto cargo's `tests/` targets, selected
-        by `--test <t>`. The flag exists on the untiered `test` verb today; no
-        tier verb reaches it."""
+    def test_the_integration_cell_selects_the_test_kind_and_its_named_target(self):
+        """RED — `--test <t>` still selects one target, and the kind filter
+        rides beside it, so one rule holds."""
         cell = "rust/integration"
         drive = self.drive(self.rust_argv(
             "integration", ["--crate", self.CRATE, "--test", "probe_it"]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
         self.assertSelects(runs, ["--test", "probe_it"], cell,
                            "cargo selects an integration target by name")
+        self.assertSelects(runs, ["-E", RUST_INTEGRATION_KINDS], cell,
+                           "rust's integration selection is the test kind")
+        self.assertDoesNotSelect(runs, "--tests", cell,
+                                 "`--tests` also runs the lib and bin unit tests")
         self.assertClosedFromItsStream(drive, cell)
         self.assertIngestedTier(drive, "integration", cell)
 
-    def test_the_e2e_cell_selects_its_nextest_profile(self):
-        """RED — §S3 maps `e2e` onto the nextest PROFILE (`-P e2e`, the
-        docker-infra tier `.config/nextest.toml` carves out)."""
-        cell = "rust/e2e"
-        drive = self.drive(self.rust_argv(
-            "e2e", ["--crate", self.CRATE, "--profile", "e2e"]))
+    def test_the_integration_cell_with_no_target_named_selects_the_test_kind(self):
+        """RED — the client hands nextest `--tests`, which builds the lib and
+        bin targets in test mode and files their unit tests as integration."""
+        cell = "rust/integration"
+        drive = self.drive(self.rust_argv("integration", ["--crate", self.CRATE]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
-        self.assertSelects(runs, ["-P", "e2e"], cell,
-                           "nextest selects the e2e tier by profile")
-        self.assertClosedFromItsStream(drive, cell)
-        self.assertIngestedTier(drive, "e2e", cell)
-
-
-RustSplitCellsTest.test_the_unit_cell_selects_cargos_lib_target.cell = ("rust", "unit")
-RustSplitCellsTest.test_the_integration_cell_selects_a_cargo_test_target.cell = (
-    "rust", "integration")
-RustSplitCellsTest.test_the_e2e_cell_selects_its_nextest_profile.cell = ("rust", "e2e")
+        self.assertSelects(runs, ["-E", RUST_INTEGRATION_KINDS], cell,
+                           "rust's integration selection is the test kind")
+        self.assertDoesNotSelect(runs, "--tests", cell,
+                                 "`--tests` also runs the lib and bin unit tests")
+        self.assertIngestedTier(drive, "integration", cell)
 
 
 class ArduinoSplitCellTest(_ArduinoModalityCase):
@@ -1067,66 +1044,15 @@ class ArduinoSplitCellTest(_ArduinoModalityCase):
         self.assertIngestedTier(drive, "unit", cell)
 
 
-ArduinoSplitCellTest.test_the_unit_cell_runs_the_native_host_build.cell = (
-    "arduino", "unit")
-
-
-class SplitCellCoverageTest(unittest.TestCase):
-    """AC6's count, DERIVED: "Every split cell is asserted and the cell count is
-    itself asserted — 'the client runs the tier' is satisfiable by one client,
-    and that is the defect this AC exists to prevent."
-
-    PIN — the instrument, not the subject. It fails when this file stops
-    driving a cell §S3 names, which is exactly how a per-cell requirement
-    shrinks to a per-client one unnoticed."""
-
-    def _driven_cells(self):
-        driven = {}
-        for case in (MvnSplitCellsTest, RustSplitCellsTest, ArduinoSplitCellTest):
-            for name in dir(case):
-                if not name.startswith("test_"):
-                    continue
-                cell = getattr(getattr(case, name), "cell", None)
-                if cell is not None:
-                    driven.setdefault(cell, []).append(f"{case.__name__}.{name}")
-        return driven
-
-    def test_every_split_cell_of_the_matrix_is_driven_by_this_file(self):
-        driven = self._driven_cells()
-        self.assertEqual(
-            set(driven), _split_cells(),
-            f"AC6 is per CELL: §S3's split cells are "
-            f"{sorted(_split_cells())!r} and this file drives "
-            f"{sorted(driven)!r}. Every cell whose toolchain already makes the "
-            f"split must be asserted against that split.")
-
-    def test_the_asserted_cell_count_spans_more_than_one_client(self):
-        cells = _split_cells()
-        clients = {client for client, _tier in cells}
-        self.assertEqual(
-            len(cells), sum(len(t) for t in TOOLCHAIN_SPLIT_CELLS.values()),
-            "the cell count is derived from §S3's matrix, never frozen")
-        self.assertEqual(
-            clients, set(TOOLCHAIN_SPLIT_CELLS),
-            f"every client whose toolchain splits tiers must contribute cells; "
-            f"got {sorted(clients)!r}")
-        self.assertGreater(
-            len(clients), 1,
-            "AC6's named defect: 'the client runs the tier' is satisfiable by "
-            "ONE client, so a matrix that collapsed to one client would make "
-            "this AC unfalsifiable")
-
-
 # ── AC6a: a declared cell with no declaration REFUSES ──────────────────────
 
 
 class _SplitCellRefusalProbe:
     """AC6a's negative bound, shared body: "Asserted NOT to fire on a split
     cell: a refusal demanding a declaration from cargo's `--lib` would be the
-    defect." The cell list comes from §S3's matrix, so these classes cannot
-    drift from `SplitCellCoverageTest`."""
+    defect." The cell list comes from `TOOLCHAIN_SPLIT_CELLS`."""
 
-    def assertNoSplitCellRefuses(self, client, build_argv):
+    def assertNoSplitCellRefuses(self: Any, client, build_argv):
         for tier in TOOLCHAIN_SPLIT_CELLS[client]:
             with self.subTest(cell=f"{client}/{tier}"):
                 drive = self.drive(build_argv(tier))
@@ -1155,7 +1081,8 @@ class MvnSplitCellsDoNotRefuseTest(_MvnModalityCase, _SplitCellRefusalProbe):
 
 
 class RustSplitCellsDoNotRefuseTest(_RustModalityCase, _SplitCellRefusalProbe):
-    """RED — all three of cargo's split cells refuse today."""
+    """PIN — cargo's two split cells, `unit` and `integration`, run with no
+    declaration; `e2e` is a declared cell and is not probed here."""
 
     def test_no_cargo_split_cell_demands_a_declaration(self):
         self.write_nextest_junit()
@@ -1301,6 +1228,41 @@ class RustModuleIsADeclaredCellTest(_RustModalityCase):
         """RED — ESCALATION 2 again, for cargo."""
         drive = self.drive(["module", "--project-dir", self.tmpdir])
         self.assertHelpNamesTheDeclaration(drive, "rust", "rust/module")
+
+
+class RustE2eIsADeclaredCellTest(_RustModalityCase):
+    """Rust `e2e` is a declared cell: it runs `-P e2e` when the project
+    declares `[profile.e2e]` in `.config/nextest.toml`, and refuses, never
+    falling back, when it does not."""
+
+    def declare_e2e_profile(self):
+        config = Path(self.tmpdir, ".config", "nextest.toml")
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('[profile.e2e]\ndefault-filter = "all()"\n')
+
+    def test_an_undeclared_e2e_cell_refuses_and_never_falls_back(self):
+        """RED — the client runs `-P e2e` whether or not it is declared."""
+        drive = self.drive(self.rust_argv("e2e", ["--crate", self.CRATE]))
+        self.assertRefusesWithoutFallingBack(drive, "rust/e2e")
+        self.assertTrue(self.refused_for_no_declaration(drive),
+                        f"rust/e2e answers {TIER_RUN_UNDECLARED_CODE}; "
+                        f"stderr={drive.err[-800:]!r}")
+
+    def test_the_e2e_refusal_names_cargos_own_declaration(self):
+        """RED — the client runs instead of refusing."""
+        drive = self.drive(self.rust_argv("e2e", ["--crate", self.CRATE]))
+        self.assertHelpNamesTheDeclaration(drive, "rust", "rust/e2e")
+
+    def test_a_declared_e2e_cell_selects_its_nextest_profile(self):
+        """PIN — a declared `[profile.e2e]` runs `-P e2e`, filed as e2e."""
+        cell = "rust/e2e"
+        self.declare_e2e_profile()
+        drive = self.drive(self.rust_argv("e2e", ["--crate", self.CRATE]))
+        runs = self.assertToolchainRan(drive, "cargo", cell)
+        self.assertSelects(runs, ["-P", "e2e"], cell,
+                           "a declared e2e tier runs its own nextest profile")
+        self.assertClosedFromItsStream(drive, cell)
+        self.assertIngestedTier(drive, "e2e", cell)
 
 
 # ── AC12: rust's higher tiers stop reporting as `unit` ─────────────────────

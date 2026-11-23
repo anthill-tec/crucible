@@ -38,8 +38,7 @@ unfalsifiable — a cell already wired would pass without any detection existing
 `DECLARED_CELLS` below picks one refusing cell per stack (bun/python `unit`,
 mvn `bdd`, rust `module`, arduino `integration`), which is also why the five
 span four different tiers: what §S3 calls a declared cell is a property of the
-CELL, never of the client. `DeclaredCellCoverageTest` asserts that property
-rather than trusting this paragraph.
+CELL, never of the client.
 
 HOW THE INVOCATION IS MEASURED: cycle 379's fake-toolchain harness, adopted
 whole — every toolchain reachable from a drive is a tiny fake EXECUTABLE that
@@ -59,12 +58,6 @@ materialises exactly that, re-tiered to the cell under drive. That is the whole
 point of AC14a: "'the refusal names a surface' (AC6a) is satisfied by naming a
 surface that does nothing, which is what shipped", and only an instruction that
 is FOLLOWED programmatically can catch it.
-
-HOW THE COUNT IS DERIVED, and why it is not a frozen fleet dict: `FLEET` is
-globbed from `clients/*-crucible.py`, so a sixth client added to the fleet makes
-`DeclaredCellCoverageTest` fail rather than pass with five green stacks. Three
-of the existing tier-suite files hardcode the fleet; VERIFY flagged it, and this
-file uses the derived form.
 
 MEASURED ON `feature/CR-CRU-111` @ `5fcd309` (cycles 377-382 merged),
 2026-09-08 — what is RED here and what is a PIN, stated per test, because a
@@ -97,11 +90,6 @@ colour means nothing:
          from every client's `funcs` map, so no invocation can put
          `"tier": "bdd"` on the wire and AC2's sixth value is unassertable
          until it can.
-  PIN  `DeclaredCellCoverageTest` — the instrument, not the subject: the
-         derived fleet size, the one-cell-per-client bound, and the check that
-         every cell driven here is a DECLARED cell rather than one §S3's matrix
-         already splits. It fails when this file stops driving a stack, which
-         is how a per-stack requirement silently shrinks to one example.
 
 ESCALATIONS recorded at the time of writing (full text in the report):
 
@@ -157,10 +145,9 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
-import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 from tests.client.go_client_harness import (
     GoProject,
@@ -170,10 +157,8 @@ from tests.client.go_client_harness import envelope as go_envelope
 from tests.client.go_client_harness import flag_value as go_flag_value
 from tests.client.go_client_harness import said as go_said
 from tests.client.go_client_harness import terminal_events as go_terminal_events
-from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLIENTS_DIR = TEST_INSTALL_CLIENTS
 MODALITY_PATH = Path(__file__).resolve().parents[1] / "integration" / "test_client_tier_run_modality.py"
 
 
@@ -190,7 +175,7 @@ def _load_module(path, name):
 # module. Its module fixture (the fake toolchains on PATH) is adopted BY NAME,
 # so this file's toolchains are built and torn down by the same code that
 # built cycle 379's.
-_MODALITY = _load_module(MODALITY_PATH, "cr111_c8_modality_harness")
+_MODALITY: Any = _load_module(MODALITY_PATH, "cr111_c8_modality_harness")
 
 setUpModule = _MODALITY.setUpModule
 tearDownModule = _MODALITY.tearDownModule
@@ -212,17 +197,6 @@ TIER_RUN_UNDECLARED_CODE = _MODALITY.TIER_RUN_UNDECLARED_CODE
 TEST_INGEST_ENDPOINTS = _MODALITY.TEST_INGEST_ENDPOINTS
 _JUNIT_SUITES_ONE_PASS = _MODALITY._JUNIT_SUITES_ONE_PASS
 
-
-# ── the fleet, DERIVED ─────────────────────────────────────────────
-#
-# AC14 asks for "five assertions and the count asserted", and a frozen five is
-# the census defect VERIFY flagged in three sibling files: a sixth client would
-# join the fleet and this suite would keep passing while never driving it. The
-# fleet is what `clients/` contains.
-_CLIENT_SUFFIX = "-crucible.py"
-CLIENT_FILES = tuple(sorted(p.name for p in CLIENT_SOURCE_DIR.glob("*" + _CLIENT_SUFFIX)))
-FLEET = tuple(name[: -len(_CLIENT_SUFFIX)] for name in CLIENT_FILES)
-
 # §S6's table, transcribed ONCE: the cell each stack is asserted on. Every one
 # of them REFUSES today, which is what makes AC14 falsifiable — a cell the
 # client already runs would pass with no detection mechanism in existence.
@@ -234,13 +208,6 @@ DECLARED_CELLS = {
     "arduino": "integration",
     "go": "integration",
 }
-
-# The clients that declare NO tier, each with why: no declared-target
-# assertion is possible on them, so the coverage pin counts them beside the
-# driven cells rather than letting the fleet's size outgrow the asserted count.
-# None today: go declares its tiers by build tag, and its declared cell is
-# driven by `GoDeclaredTargetRunsTest` below.
-DECLARES_NO_TIER = {}
 
 # What counts as a project ARTEFACT named in a refusal (AC14b's second face).
 # Derived from the text rather than listed per stack: a refusal that names a
@@ -353,7 +320,11 @@ _TOML_LINE_RE = re.compile(r"^(?:\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_-]*\s*=\s*\S.*)$
 # ── the shared body: declare, drive, and read what actually ran ────────────
 
 
-class _DeclarationProbe:
+# A mixin over the modality cases: typed so its `self` reads as a test case.
+_ProbeBase: Any = object
+
+
+class _DeclarationProbe(_ProbeBase):
     """§S6's three-part measurement, once. A per-stack fixture supplies four
     facts — the toolchain the invocation is read off, the argv a run of a
     declared cell takes, how §S6's declaration is written, and how the SAME
@@ -637,6 +608,7 @@ class _BunDeclarationCase(_BunModalityCase, _DeclarationProbe):
             f"AC14a — bun/{tier}: the refusal must name the SCRIPT to declare "
             f"concretely enough to write it; it gives no '\"name\": \"body\"' "
             f"example: {steps!r}")
+        assert example is not None
         paths = self._write_suite(tier)
         self._write_package_json(
             _retier(example.group(1), tier),
@@ -884,6 +856,7 @@ class _ArduinoDeclarationCase(_ArduinoModalityCase, _DeclarationProbe):
             f"AC14a — arduino/{tier}: the refusal must name the TARGET to "
             f"declare concretely enough to write it; it gives no 'make "
             f"<target>' example: {steps!r}")
+        assert example is not None
         return self._declare(_retier(example.group(1), tier))
 
     def declaration_text(self):
@@ -945,25 +918,6 @@ class ArduinoDeclaredTargetRunsTest(_ArduinoDeclarationCase):
         self.assertDeclaredTargetRuns(DECLARED_CELLS["arduino"])
 
 
-BunDeclaredTargetRunsTest.test_a_declared_package_json_script_is_detected_and_run.cell = (
-    "bun", DECLARED_CELLS["bun"])
-PythonDeclaredTargetRunsTest.test_a_declared_discovery_start_dir_is_detected_and_run.cell = (
-    "python", DECLARED_CELLS["python"])
-MvnDeclaredTargetRunsTest.test_a_declared_pom_profile_is_detected_and_run.cell = (
-    "mvn", DECLARED_CELLS["mvn"])
-RustDeclaredTargetRunsTest.test_a_declared_nextest_profile_is_detected_and_run.cell = (
-    "rust", DECLARED_CELLS["rust"])
-
-
-def _declared_cell(client):
-    """Mark a test method as the declared-target assertion of `client`'s
-    cell, the mark `DeclaredCellCoverageTest` counts."""
-    def mark(func):
-        func.__dict__.update(cell=(client, DECLARED_CELLS[client]))
-        return func
-    return mark
-
-
 class GoDeclaredTargetRunsTest(unittest.TestCase):
     """go — a tier is declared by `//go:build <tier>` in a `_test.go` file that
     declares a test. The same cell refuses with no such file, naming the
@@ -977,7 +931,6 @@ class GoDeclaredTargetRunsTest(unittest.TestCase):
 
     PACKAGE = "example.com/tier-e2e-helper-only/probe"
 
-    @_declared_cell("go")
     def test_a_declared_build_tag_is_detected_and_run(self):
         gap = go_toolchain_gap()
         if gap:
@@ -1012,97 +965,6 @@ class GoDeclaredTargetRunsTest(unittest.TestCase):
         self.assertEqual(go_terminal_events(p.held()),
                          [(self.PACKAGE, "TestDeclaredProbe", "pass")],
                          f"exactly the declared test is filed; {where}")
-
-
-ArduinoDeclaredTargetRunsTest.test_a_declared_native_make_target_is_detected_and_run.cell = (
-    "arduino", DECLARED_CELLS["arduino"])
-
-_AC14_CASES = (BunDeclaredTargetRunsTest, PythonDeclaredTargetRunsTest,
-               MvnDeclaredTargetRunsTest, RustDeclaredTargetRunsTest,
-               ArduinoDeclaredTargetRunsTest, GoDeclaredTargetRunsTest)
-
-
-class DeclaredCellCoverageTest(unittest.TestCase):
-    """AC14's count — 'Five assertions and the count asserted' — DERIVED from
-    `clients/*-crucible.py` rather than from a frozen fleet dict.
-
-    PIN — the instrument, not the subject. It fails when a client joins the
-    fleet undriven, when this file stops driving one, or when a cell driven
-    above stops being a DECLARED cell — which is how a per-stack requirement
-    shrinks to one example unnoticed."""
-
-    def _driven_cells(self):
-        driven = {}
-        for case in _AC14_CASES:
-            for name in dir(case):
-                if not name.startswith("test_"):
-                    continue
-                cell = getattr(getattr(case, name), "cell", None)
-                if cell is not None:
-                    driven.setdefault(cell, []).append(f"{case.__name__}.{name}")
-        return driven
-
-    def test_every_client_in_the_fleet_has_its_declared_target_asserted(self):
-        driven = {client for client, _tier in self._driven_cells()}
-        self.assertEqual(driven & set(DECLARES_NO_TIER), set(),
-                         "a client recorded as declaring no tier is never driven "
-                         "as declaring one")
-        self.assertEqual(
-            driven | set(DECLARES_NO_TIER), set(FLEET),
-            f"AC14 is per STACK: the fleet is {sorted(FLEET)!r} (globbed from "
-            f"clients/*{_CLIENT_SUFFIX}) and this file asserts a declared "
-            f"target on {sorted(driven)!r}. A stack whose declaration surface "
-            f"is never driven is a stack where §S6 is unasserted.")
-
-    def test_the_asserted_count_is_the_fleets_own_size(self):
-        cells = self._driven_cells()
-        self.assertEqual(
-            len(FLEET), len(CLIENT_FILES),
-            "the fleet size is derived from the client files themselves, "
-            "never frozen")
-        self.assertEqual(
-            len(cells) + len(DECLARES_NO_TIER), len(FLEET),
-            f"AC14 asks for one declared-target assertion per client that "
-            f"declares tiers, and the fleet has {len(FLEET)} of which "
-            f"{sorted(DECLARES_NO_TIER)!r} declare none; this file drives "
-            f"{sorted(cells)!r}")
-        self.assertGreater(
-            len(FLEET), 1,
-            "a fleet of one would make AC14's per-stack requirement "
-            "unfalsifiable")
-
-    def test_each_asserted_cell_is_one_its_client_declares_rather_than_splits(self):
-        """The bound that keeps AC14 falsifiable: every cell driven above is one
-        §S3 leaves to a project DECLARATION, never one the toolchain already
-        splits — a split cell runs today and would pass with no detection
-        mechanism in existence."""
-        split = _MODALITY.TOOLCHAIN_SPLIT_CELLS
-        for client, tier in sorted(self._driven_cells()):
-            with self.subTest(cell=f"{client}/{tier}"):
-                self.assertNotIn(
-                    tier, split.get(client, ()),
-                    f"AC14 — {client}/{tier}: this cell is a TOOLCHAIN-SPLIT "
-                    f"cell of §S3's matrix, so it runs today and asserting it "
-                    f"here would prove nothing about §S6's detection.")
-
-
-class UndeclaringClientsOfferNoTierVerbTest(unittest.TestCase):
-    """The bound on `DECLARES_NO_TIER`: a client recorded as declaring no tier
-    really offers no declared-tier verb, so the record cannot hide a client
-    whose declared targets go unasserted."""
-
-    def test_each_client_recorded_as_declaring_no_tier_refuses_every_tier_verb(self):
-        self.assertTrue(set(DECLARES_NO_TIER) <= set(FLEET),
-                        f"each recorded client is in the fleet: {sorted(FLEET)!r}")
-        for client in sorted(DECLARES_NO_TIER):
-            for verb in ("unit", "module", "integration", "e2e", "bdd"):
-                with self.subTest(client=client, verb=verb):
-                    result = subprocess.run(
-                        [sys.executable, str(CLIENTS_DIR / f"{client}{_CLIENT_SUFFIX}"),
-                         verb, "--help"],
-                        capture_output=True, text=True, timeout=60, check=False)
-                    self.assertEqual(result.returncode, 2, result.stdout[-400:])
-                    self.assertIn(f"invalid choice: '{verb}'", result.stderr)
 
 
 # ── AC14a: the refusal is REACHABLE-PAST ──────────────────────────────

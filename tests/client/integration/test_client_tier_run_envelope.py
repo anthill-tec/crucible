@@ -157,12 +157,10 @@ nothing. MEASURED on `feature/CR-CRU-111`@`dd03561` (cycles 377-380 merged):
          nothing_was_ingested` — the two clients whose tier verb has a
          no-report exit that ingests nothing. Same bound, same reason, same
          trivial pass today.
-  PIN  `ExitPathCoverageTest` (three methods), `Ac7PathCountTest` (two) and
-         the two fleet-reach instruments in
-         `TierLessEnvelopeIsHonestTest`/`TierRunUndeclaredClaimsNothingTest`.
-         They fail when this file stops driving a (client, path) cell, when a
-         client stops being probed, or when the four paths this file names
-         stop matching AC7's own words.
+
+Rust's zero-discovery path is driven on `regression` (`RUST_ZERO_DISCOVERY_VERB`):
+a `unit` or `integration` kind selection that lists no test is refused before a
+run opens, so only `regression` still opens and files a run that found none.
 
 HARNESS: cycle 379's `tests/client/integration/test_client_tier_run_modality.py`, adopted
 whole exactly as cycle 380 adopted it — which is in turn cycle 378's
@@ -218,11 +216,11 @@ import contextlib
 import copy
 import importlib.util
 import os
-import re
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from tests.client.fake_nextest import held_results
@@ -236,12 +234,9 @@ from tests.client.live_run_harness import (
 )
 from tests.client import TEST_INSTALL_CLIENTS
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 MODALITY_PATH = Path(__file__).resolve().parents[1] / "integration" / "test_client_tier_run_modality.py"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
-CR_PATH = (REPO_ROOT / "docs" / "changes"
-           / "CR-CRU-111-the-client-can-say-which-tier-it-ran.md")
 
 
 def _load_module(path, name):
@@ -255,8 +250,8 @@ def _load_module(path, name):
 # Cycle 379's harness, adopted whole (cycle 380's precedent). Only NON-test
 # names are taken: importing one of its TestCases would run that cycle's suite
 # a second time under this module.
-_MODALITY = _load_module(MODALITY_PATH, "cr111_c5_tier_modality_harness")
-_AXI = _load_module(AXI_MODULE_PATH, "cr111_c5_axi")
+_MODALITY: Any = _load_module(MODALITY_PATH, "cr111_c5_tier_modality_harness")
+_AXI: Any = _load_module(AXI_MODULE_PATH, "cr111_c5_axi")
 
 AGENT = _MODALITY.AGENT
 PARSED = _MODALITY.PARSED
@@ -289,52 +284,6 @@ COMPILE_STATEMENT = getattr(_AXI, COMPILE_CONST, "compile")
 NOTHING_INGESTED = getattr(_AXI, NOTHING_CONST, "none")
 SENTINELS = (UNSTATED, COMPILE_STATEMENT, NOTHING_INGESTED)
 
-# ── AC7's four exit paths, READ OUT OF AC7 (ESCALATION 2) ──────────────────
-#
-# Each entry is `(label, the token AC7 itself uses for that path)`. The tokens
-# are asserted to appear in AC7's own text, so this file's notion of "the four
-# paths" cannot drift from the CR's.
-EXIT_PATHS = (
-    ("success", "success"),
-    ("failing-suite", "a failing suite"),
-    ("zero-discovery", "zero-discovery"),
-    ("compile-fallback", "the compile-tier fallback"),
-)
-EXIT_PATH_LABELS = tuple(label for label, _token in EXIT_PATHS)
-
-_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
-
-
-def _ac7_text():
-    """AC7's own paragraph, out of the CR. Read rather than restated, so the
-    path set and the count below are the SPEC's and not this file's."""
-    text = CR_PATH.read_text()
-    start = text.index("- **AC7**")
-    end = text.index("- **AC8**", start)
-    return text[start:end]
-
-
-def _ac7_stated_assertion_count():
-    """The count AC7 states in words ("Four assertions, one per path"), as an
-    int. Derived, so a CR that grew a fifth path fails this file rather than
-    being silently under-asserted."""
-    match = re.search(r"\b(" + "|".join(_NUMBER_WORDS) + r")\s+assertions\b",
-                      _ac7_text(), re.IGNORECASE)
-    assert match is not None, f"AC7 states no assertion count: {_ac7_text()!r}"
-    return _NUMBER_WORDS[match.group(1).lower()]
-
-
-def _tier_verb_clients():
-    """The fleet, SCANNED: every `clients/*-crucible.py` that registers the six
-    tier verbs through the shared registrar. Derived rather than frozen, so a
-    sixth client cannot join the fleet without joining this file."""
-    found = {}
-    for path in sorted(CLIENTS_DIR.glob("*-crucible.py")):
-        if "add_tier_verbs(" in path.read_text():
-            found[path.name.split("-crucible.py")[0]] = path
-    return found
-
-
 # The tier VERB this file drives per client, and the verb that owns each
 # client's compile ingest — both derived by reading the clients (see the
 # matrix in the module docstring), recorded here so every drive below is built
@@ -348,6 +297,10 @@ COMPILE_EXIT_VERB = {"bun": "test", "python": "regression", "mvn": "unit",
 # no test is refused before anything runs, so the runner finding no test is
 # driven on go's other tier verb.
 GO_ZERO_DISCOVERY_VERB = "regression"
+# rust's likewise: a `unit` or `integration` kind selection that lists no test
+# is refused before a run opens, so the runner finding no test is driven on
+# `regression`, which still opens and files a zero-discovery run.
+RUST_ZERO_DISCOVERY_VERB = "regression"
 
 
 # ── fixtures: junit payloads for the three RUN outcomes ────────────────────
@@ -470,13 +423,19 @@ def tearDownModule():
 
 
 def _fake(name):
+    assert _BIN_DIR is not None, "setUpModule lays the fakes down first"
     return str(Path(_BIN_DIR) / name)
+
+
+# The probes are mixins over the modality cases, whose type is the dynamically
+# loaded harness's: typed as such, so a probe's `self` reads as a test case.
+_ProbeBase: Any = object
 
 
 # ── the assertion every test in this file is built from ────────────────────
 
 
-class _EnvelopeTierProbe:
+class _EnvelopeTierProbe(_ProbeBase):
     """AC7's assertion, once: the envelope's tier statement is READ from the
     structured field and COMPARED against what this same drive put on the wire.
 
@@ -929,9 +888,9 @@ class RustIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._RustModalityCa
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
-        where = "rust unit / zero-discovery"
+        where = "rust regression / zero-discovery"
         os.environ["FAKE_NEXTEST_CASES"] = "[]"
-        drive = self.drive(self.rust_argv(TIER_VERB_DRIVEN["rust"]),
+        drive = self.drive(self.rust_argv(RUST_ZERO_DISCOVERY_VERB),
                            response=_EMPTY_RESPONSE)
         self.assertReachedZeroDiscovery(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
@@ -1106,30 +1065,6 @@ class GoIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._GoModalityCase):
         self.assertStatesCompileAndNotATestTier(drive, where)
 
 
-_EXIT_PATH_CASES = (BunIngestedTierEnvelopeTest, PythonIngestedTierEnvelopeTest,
-                    MvnIngestedTierEnvelopeTest, RustIngestedTierEnvelopeTest,
-                    ArduinoIngestedTierEnvelopeTest, GoIngestedTierEnvelopeTest)
-
-# Every (client, path) cell this file drives, attached to the method that
-# drives it — the same `.cell` idiom cycle 379 uses, so `ExitPathCoverageTest`
-# derives its coverage instead of restating it.
-for _case, _client in zip(_EXIT_PATH_CASES,
-                          ("bun", "python", "mvn", "rust", "arduino", "go")):
-    _case.test_a_successful_tiered_run_states_the_tier_it_ingested.exit_path = (
-        _client, "success")
-    _case.test_a_failing_suite_still_states_the_tier_it_ingested.exit_path = (
-        _client, "failing-suite")
-    _case.test_a_zero_discovery_run_states_what_it_ingested.exit_path = (
-        _client, "zero-discovery")
-    _case.test_the_compile_fallback_states_compile_and_not_a_test_tier.exit_path = (
-        _client, "compile-fallback")
-# The loop variables are DELETED rather than left bound: a module-level name
-# still holding a TestCase subclass is collected a second time under that name
-# (measured — pytest reports the whole class again as `_case`), which
-# double-counts every drive above and makes the suite's own totals lie.
-del _case, _client
-
-
 # ── the honest tier-less envelope (ESCALATION 1) ───────────────────────────
 
 
@@ -1176,21 +1111,6 @@ class _TierLessProbe(_EnvelopeTierProbe):
                     stated, UNSTATED,
                     f"AC7 — {where}: a run ingested with no stated tier says "
                     f"so with {UNSTATED!r} (ESCALATION 1); it says {stated!r}")
-
-
-class TierLessEnvelopeIsHonestTest(unittest.TestCase):
-    """The coverage bound for the tier-less rule: it is asserted in every
-    client of the fleet, derived, never in one."""
-
-    def test_every_client_in_the_fleet_is_probed_for_the_tier_less_envelope(self):
-        """PIN — the instrument. Rule 15: "the envelope is honest about a
-        tier-less run" is satisfiable by one client."""
-        probed = {case.CLIENT for case in _TIER_LESS_CASES}
-        self.assertEqual(
-            probed, set(_tier_verb_clients()),
-            f"every client registering tier verbs must be probed for the "
-            f"tier-less envelope; scanned {sorted(_tier_verb_clients())!r}, "
-            f"probed {sorted(probed)!r}")
 
 
 class BunTierLessEnvelopeTest(_TierLessProbe, _MODALITY._BunModalityCase):
@@ -1320,31 +1240,7 @@ class GoTierLessEnvelopeTest(_TierLessProbe, _MODALITY._GoModalityCase):
             "was scripted to count")
 
 
-_TIER_LESS_CASES = (BunTierLessEnvelopeTest, PythonTierLessEnvelopeTest,
-                    MvnTierLessEnvelopeTest, RustTierLessEnvelopeTest,
-                    ArduinoTierLessEnvelopeTest, GoTierLessEnvelopeTest)
-
-
 # ── §S1's refusal ingested nothing, so it claims nothing ───────────────────
-
-
-class TierRunUndeclaredClaimsNothingTest(unittest.TestCase):
-    """Cycle 379's `tier-run-undeclared` refusal runs nothing and ingests
-    nothing. It is NOT one of AC7's four paths and is excluded from the matrix
-    count — but the field AC7 adds must not appear on it naming a tier, or a
-    verb that refused would read on the board like a verb that ran.
-
-    PIN — passes today because nothing states a tier anywhere. Its job starts
-    at GREEN."""
-
-    def test_every_client_with_an_undeclared_cell_is_probed_here(self):
-        """PIN — the instrument, derived: every client that registers tier verbs
-        has at least one cell §S3 leaves declared, and each must be probed."""
-        probed = {case.CLIENT for case in _REFUSAL_CASES}
-        self.assertEqual(
-            probed, set(_tier_verb_clients()),
-            f"scanned {sorted(_tier_verb_clients())!r}, probed "
-            f"{sorted(probed)!r}")
 
 
 class _RefusalProbe(_EnvelopeTierProbe):
@@ -1401,100 +1297,6 @@ class GoRefusalClaimsNothingTest(_RefusalProbe, _MODALITY._GoModalityCase):
 
     def refusal_argv(self):
         return self.go_argv(self.UNDECLARED_CELL)
-
-
-_REFUSAL_CASES = (BunRefusalClaimsNothingTest, PythonRefusalClaimsNothingTest,
-                  MvnRefusalClaimsNothingTest, RustRefusalClaimsNothingTest,
-                  ArduinoRefusalClaimsNothingTest, GoRefusalClaimsNothingTest)
-
-
-# ── the counts, DERIVED ────────────────────────────────────────────────────
-
-
-class ExitPathCoverageTest(unittest.TestCase):
-    """AC7's counts, both of them, derived — never frozen.
-
-    Rule 15's lesson from this CR, applied twice over: AC7 is written as "the
-    envelope" and "four assertions", and both phrasings are satisfiable once
-    and shippable. The client count is SCANNED out of `clients/`, the path
-    count is READ OUT OF AC7's own text, and the product is compared against
-    the cells this file actually drives.
-
-    PIN — the instrument, not the subject."""
-
-    def _driven(self):
-        driven = {}
-        for case in _EXIT_PATH_CASES:
-            for name in dir(case):
-                if not name.startswith("test_"):
-                    continue
-                cell = getattr(getattr(case, name), "exit_path", None)
-                if cell is not None:
-                    driven.setdefault(cell, []).append(f"{case.__name__}.{name}")
-        return driven
-
-    def test_every_client_and_every_exit_path_is_driven_by_this_file(self):
-        clients = set(_tier_verb_clients())
-        expected = {(client, path) for client in clients
-                    for path in EXIT_PATH_LABELS}
-        driven = set(self._driven())
-        self.assertEqual(
-            driven, expected,
-            f"AC7 is per EXIT PATH and — rule 15 — per CLIENT. The fleet "
-            f"scanned from clients/ is {sorted(clients)!r} and AC7's paths are "
-            f"{list(EXIT_PATH_LABELS)!r}, so {len(expected)} cells must be "
-            f"driven; this file drives {len(driven)}. "
-            f"missing={sorted(expected - driven)!r} "
-            f"extra={sorted(driven - expected)!r}")
-
-    def test_no_exit_path_cell_is_driven_twice_over(self):
-        """A cell claimed by two methods would let the coverage set look full 
-        while another cell went missing — the count must be a partition."""
-        duplicated = {cell: names for cell, names in self._driven().items()
-                      if len(names) > 1}
-        self.assertEqual(
-            duplicated, {},
-            f"each (client, exit path) cell is driven exactly once: "
-            f"{duplicated!r}")
-
-    def test_the_asserted_cell_count_spans_the_whole_fleet(self):
-        driven = set(self._driven())
-        clients = {client for client, _path in driven}
-        paths = {path for _client, path in driven}
-        self.assertEqual(
-            len(driven), len(clients) * len(paths),
-            f"the matrix must be complete: {len(clients)} clients x "
-            f"{len(paths)} paths != {len(driven)} cells driven")
-        self.assertGreater(
-            len(clients), 1,
-            "AC7 collapsed to one client would be unfalsifiable — the defect "
-            "rule 15 exists to catch")
-        self.assertGreater(
-            len(paths), 1,
-            "AC7 collapsed to one exit path would be the 'happy path only' "
-            "defect §S5 names by listing four")
-
-
-class Ac7PathCountTest(unittest.TestCase):
-    """The four paths this file names are AC7's four, read out of the CR.
-
-    PIN — the instrument. It fails if the CR grows or renames a path, which is
-    the only way this file's notion of "every exit path" could go stale."""
-
-    def test_every_path_this_file_drives_is_named_by_ac7(self):
-        text = _ac7_text()
-        for label, token in EXIT_PATHS:
-            self.assertIn(
-                token, text,
-                f"this file drives an exit path ({label!r}) AC7 does not name "
-                f"({token!r}): {text!r}")
-
-    def test_the_path_count_is_the_one_ac7_states(self):
-        self.assertEqual(
-            len(EXIT_PATHS), _ac7_stated_assertion_count(),
-            f"AC7 states {_ac7_stated_assertion_count()} assertions, one per "
-            f"path; this file names {len(EXIT_PATHS)}: "
-            f"{list(EXIT_PATH_LABELS)!r}")
 
 
 class FleetOneDefinitionTest(unittest.TestCase):

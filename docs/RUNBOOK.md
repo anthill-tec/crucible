@@ -422,6 +422,59 @@ format = "ruff"
 The ruff rule set itself is the tracked `pyproject.toml`'s. The gate then lints the checkout's python before its
 tests.
 
+## Rust tier verbs
+
+The rust client's `unit` and `integration` verbs run without any declaration. Nextest names the kind of every
+test binary, and each verb selects its kinds with one `-E` element:
+
+| Verb | Selection |
+|---|---|
+| `unit` | `kind(lib) \| kind(bin) \| kind(proc-macro)`: the crate's in-crate `#[test]` functions |
+| `integration` | `kind(test)`: the crate's `tests/*.rs` targets |
+
+- **`--filter X` narrows the selection.** The one element becomes `(<kinds>) & (X)`. The client never passes a
+  second `-E`, because nextest would union it and widen the run.
+- **`integration --test it`** runs that one target, and still passes `kind(test)`.
+- **Cargo's target flags are not used.** `--tests` also builds the lib and bins in test mode, and `--lib` misses
+  bin and proc-macro tests.
+
+**A declaration wins.** A crate that declares `[profile.unit]` or `[profile.integration]` in `.config/nextest.toml`
+runs `-P <tier>` with no kind filter: the profile is the selection. `--filter X` is then passed as `-E X`. An
+explicit `--profile` against a declared tier is refused before anything runs, because a declared tier always runs
+its declaration.
+
+**The profile an undeclared tier runs**, resolved before anything runs, with or without `--agent`:
+
+1. An explicit `--profile p`, when `.config/nextest.toml` declares `[profile.p]` or `p` is one of nextest's
+   built-ins (`default`, `default-miri`). Any other `p` is refused, naming the `[profile.p]` line to add.
+2. With no `--profile`, `ci` when `[profile.ci]` is declared.
+3. Otherwise `default`. It is passed explicitly, so a `NEXTEST_PROFILE` in the environment changes nothing.
+
+An `.config/nextest.toml` that does not parse is refused, naming the file. So is one that is not UTF-8, and one
+whose `profile` key is not the `[profile]` table. It is never filed as a compile failure.
+A project's `[targets.<profile>]` entry is checked against the profile the chain picked.
+
+**Without a `default-filter`, nextest's built-in `default` profile runs everything the kind filter selects.** On a
+crate with a docker tier in `tests/`, `integration` under `default` includes it. Declare `[profile.ci]` (or
+`[profile.integration]`) with a `default-filter` that leaves the docker tier out.
+
+**An empty selection is refused.** Before any run opens, the verb lists its selection with `cargo nextest list`.
+When the list names no test the selection matches, and no `#[ignore]`d test the selection holds, the answer is
+`ok: false` with code `tier-selection-empty`, naming the tier, the kind filter, any `--filter`, and the
+`[profile.<tier>]` that would replace it. No run is opened and nothing is filed. Nextest lists an ignored test as
+ignored even when `--filter` leaves it out, so a list whose only tests are ignored is followed by a second one
+with `--run-ignored all`, which only decides whether the selection holds them. A tier whose only tests are
+ignored is not refused, and nextest then answers "no tests to run". A list that fails to build is not an empty
+selection: the run goes on and, with `--agent`, files the compile failure as before.
+
+**`e2e`, `module` and `bdd` are declared-only.** Each runs `-P <tier>` when `[profile.<tier>]` is declared, and
+answers `tier-run-undeclared` otherwise. `e2e` takes no `--profile`.
+
+**Doctests run under no verb.** Nextest does not run them; run `cargo test --doc` yourself.
+
+`test`, `regression` and `pre-merge-gate` keep `-P ci` (their `--profile` default), and still fail on a crate
+with no `[profile.ci]`.
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server

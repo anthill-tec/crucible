@@ -84,6 +84,7 @@ import atexit
 import contextlib
 import glob
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -651,6 +652,9 @@ _STREAM_FLAGS = ("--message-format", "libtest-json-plus",
 #: Where a run keeps its stream and its list, in its own reports directory.
 _STREAM_FILE = "nextest-stream.jsonl"
 _LIST_FILE = "nextest-list.json"
+#: Where the list that decides an ignored test's place in a selection is
+#: kept: beside the run's own list, never posted in its place.
+_RUN_IGNORED_LIST_FILE = "nextest-list-run-ignored.json"
 #: The instrumented build's own target directory, under the target root.
 _COVERAGE_TARGET_DIR = "llvm-cov-target"
 #: How long the relay's `finish` may take once the runner exited, and once a
@@ -898,13 +902,17 @@ def _streamed_envelope(verb, project_dir, agent, *, run_help=True,
 
 def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
                  context, release, warnings, envelope, coverage_output=None,
-                 log_path=None, gate=False, measure_wall=False):
+                 log_path=None, gate=False, measure_wall=False, listed=None,
+                 list_timing=None):
     """A streamed run with an agent: list, post the list, run with the stream
     relayed, close from the stream. `selection` is the run's profile, crates,
     targets, features and filter; `coverage_output` the lcov path of a
     coverage run; `envelope` the body's `_streamed_envelope`. A list that
     exits non-zero is a build failure filed as one, closing the run, and no
-    run follows. Returns the verb's exit code."""
+    run follows. A body that already listed the selection hands its list on
+    (`listed`, written to the run's own list file) with the bracket it was
+    timed in (`list_timing`), and the crate is not listed again. Returns the
+    verb's exit code."""
     agent = args.agent
     key = _project_key(project_dir)
     warnings = list(warnings)
@@ -939,9 +947,10 @@ def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
     # A signal while the run is open is trapped and the open run disclosed.
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
-            listed = _run_logged(list_cmd, project_dir, run_env, None, capture=True,
-                                 stdout_path=os.path.join(own_dir, _LIST_FILE))
+            if listed is None:
+                print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
+                listed = _run_logged(list_cmd, project_dir, run_env, None, capture=True,
+                                     stdout_path=os.path.join(own_dir, _LIST_FILE))
             if listed.returncode != 0:
                 return _list_build_failure(verb, project_dir, agent, listed,
                                            run_id, release, warnings, unfiled)
@@ -966,6 +975,11 @@ def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
         _finish_relay(relay, 0)
         raise
     held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
+    if list_timing is not None:
+        # The list this run was handed was its own first child, timed in its
+        # own bracket: its figures are the run's too.
+        timing.wall += list_timing.wall
+        timing.cpu += list_timing.cpu
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     _claim_leftover_junit(project_dir, target, selection, own_dir, started)
     runner_exit = _axi().runner_exit_code(result.returncode)
@@ -1349,10 +1363,10 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
     return 0 if resp.get("ok") else 1
 
 
-def cmd_test(args, tier=None, select=(), profile=None):
-    """cargo nextest run -p <crate> [target selection] [--features ...]
-    [--filter EXPR] -P <profile>. With --agent the run streams through
-    nextest and is closed from its stream (`_nextest_run`).
+def cmd_test(args, tier=None, kinds=None, profile=None):
+    """cargo nextest run -p <crate> [--features ...] [-E EXPR] -P <profile>.
+    With --agent the run streams through nextest and is closed from its
+    stream (`_nextest_run`).
 
     §S6 — `profile` is a DECLARED nextest profile detected for a tier verb; it
     overrides `--profile` because on a declared cell the profile IS the
@@ -1366,16 +1380,25 @@ def cmd_test(args, tier=None, select=(), profile=None):
     selected tests take, so absent a stated tier this run claims none and the
     server applies its own documented default.
 
-    CR-CRU-111 §S3/AC6 — `select` is cargo's OWN target selection for the tier
-    the caller named (`--lib` for `unit`, `--tests`/`--test <t>` for
+    `kinds` is the nextest kind filter of a split tier (`unit`,
     `integration`), passed by the tier verb rather than flagged here: which
-    cargo targets a tier means is a property of the tier, not of the call.
+    binaries a tier means is a property of the tier, not of the call. With
+    `kinds`, the profile the run takes is resolved here, before anything
+    runs and on both paths (`_resolve_tier_profile`): a declared
+    `[profile.<tier>]` replaces the kind filter, and an undeclared tier runs
+    an explicit `--profile`, else a declared `ci`, else nextest's `default`.
     `--crate` stays OPTIONAL for those verbs — absent one the run is
     `--workspace`, cargo's own way to say "every crate" — so a tier verb never
     fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
-    refused = _nextest_refusal(args, tier or "test", project_dir,
-                               profile or args.profile)
+    if kinds is not None:
+        profile, kinds, refusal = _resolve_tier_profile(args, tier, kinds,
+                                                        project_dir)
+        if refusal is not None:
+            return _refuse_tier_run(tier, project_dir, getattr(args, "agent", None),
+                                    refusal)
+    profile = profile or args.profile
+    refused = _nextest_refusal(args, tier or "test", project_dir, profile)
     if refused is not None:
         return refused
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
@@ -1383,29 +1406,56 @@ def cmd_test(args, tier=None, select=(), profile=None):
                           "gated test run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
-        return _test_run(args, tier, select, profile, project_dir, identity)
+        return _test_run(args, tier, kinds, profile, project_dir, identity)
 
 
-def _test_run(args, tier, select, profile, project_dir, identity):
+def _test_run(args, tier, kinds, profile, project_dir, identity):
     """`cmd_test`'s run body, inside its gated-identity bracket. With an
     agent the run streams (`_nextest_run`); without one it runs `cargo
-    nextest run` with nextest's human output on the terminal, lists nothing
-    and files nothing."""
+    nextest run` with nextest's human output on the terminal and files
+    nothing.
+
+    A kind-filter selection (`kinds`) is listed first, on both paths and
+    before any run is opened: a list naming no test it selects is refused
+    (`tier-selection-empty`), and the list is handed on to the streamed run,
+    so the crate is listed once. Only a list whose sole tests are ignored is
+    followed by a second, deciding one (`_selection_empty`). A list that
+    fails is never an empty selection: the run goes on as before."""
     # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
     # runs THIS body, so the envelope must carry the verb the caller actually
     # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
     verb = tier or "test"
-    profile = profile or args.profile
     crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
-    selection = crate_selection + list(select) + ["-P", profile]
+    selection = crate_selection + ["-P", profile]
     if args.features:
         selection += ["--features", args.features]
     if getattr(args, "test", None):
         selection += ["--test", args.test]
-    if args.filter:
-        selection += ["-E", args.filter]
+    expression = _selection_expression(kinds, args.filter)
+    if expression:
+        selection += ["-E", expression]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    listed, list_timing = None, None
+    if kinds is not None:
+        own_dir = _run_reports_dir(args, project_dir) or os.path.join(project_dir, "target")
+        os.makedirs(own_dir, exist_ok=True)
+        try:
+            with _axi().abandon_trap(None):
+                listed, list_timing = _list_selection(project_dir, selection, env,
+                                                      own_dir)
+                empty = (listed.returncode == 0
+                         and _selection_empty(project_dir, selection, env,
+                                              own_dir, list_timing))
+        except _axi().RunAbandoned as abandoned:
+            return _axi().emit_run_abandoned(verb, _project_key(project_dir),
+                                             args.agent, None, abandoned, [],
+                                             post_fn=_post)
+        if empty:
+            return _refuse_tier_run(
+                verb, project_dir, args.agent,
+                _empty_selection_refusal(tier, kinds, args.filter),
+                code=TIER_SELECTION_EMPTY_CODE)
     if not args.agent:
         cmd = (["cargo", "nextest", "run"] + selection
                + (["--no-fail-fast"] if args.no_fail_fast else []))
@@ -1436,46 +1486,207 @@ def _test_run(args, tier, select, profile, project_dir, identity):
         tier=tier, context=_run_context(), release=release,
         warnings=preflight_warnings,
         envelope=_streamed_envelope(verb, project_dir, args.agent, run_help=False),
-        log_path=getattr(args, "log", None), measure_wall=True)
+        log_path=getattr(args, "log", None), measure_wall=True,
+        listed=listed, list_timing=list_timing)
 
 
-# ── CR-CRU-111 §S3/AC6 — cargo's own tier split, reachable from a tier verb ─
+# ── cargo's own tier split, reachable from a tier verb ──────────────────────
 #
-# Cargo makes the split itself: `--lib` compiles and runs the in-crate `#[test]`
-# functions, `tests/*.rs` are separate integration TARGETS selected by
-# `--tests`/`--test <name>`, and nextest PROFILES (`.config/nextest.toml`) carve
-# out the docker-infra tier. Before this the split was real in the toolchain and
-# unreachable from the client: `--lib` appeared nowhere in this file, and
-# `--test` shipped only on the untiered `test` verb. These three verbs are that
-# reach — no project declaration is asked for, because asking would invent a
-# second description of a distinction cargo already makes.
+# Nextest names the kind of every test binary: `lib`, `bin` and `proc-macro`
+# hold a crate's in-crate `#[test]` functions, and `test` is a `tests/*.rs`
+# integration target. A split tier selects its kinds with ONE `-E` element,
+# composed `&` with the user's `--filter` (a second `-E` would widen the run,
+# since nextest unions them). Cargo's target flags are not used: `--tests`
+# also builds the lib and bins in test mode, and `--lib` misses bin and
+# proc-macro tests. A project that declares `[profile.<tier>]` in
+# `.config/nextest.toml` replaces the kind filter with its own declaration.
+
+#: The kind filter of each split tier, one `-E` element each.
+UNIT_KINDS = "kind(lib) | kind(bin) | kind(proc-macro)"
+INTEGRATION_KINDS = "kind(test)"
+#: The profile an undeclared tier runs when the project declares it, and
+#: nextest's own profiles, which need no declaration (the first is the one an
+#: undeclared tier falls back to).
+_CI_PROFILE = "ci"
+_NEXTEST_BUILTIN_PROFILES = ("default", "default-miri")
+#: The code of a kind-filter selection whose list names no test.
+TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
 
 
 def cmd_unit(args):
-    """UNIT tier — cargo's in-crate `--lib` target.
-
-    `--lib` is cargo's OWN unit selection, and it is the whole point of the
-    cell: a run over the crate's every target would sweep in `tests/`, whose
-    integration targets are by definition not `unit`."""
-    return cmd_test(args, tier="unit", select=["--lib"])
+    """UNIT tier — the crate's in-crate tests: its lib, bin and proc-macro
+    binaries, unless `[profile.unit]` declares the tier."""
+    return cmd_test(args, tier="unit", kinds=UNIT_KINDS)
 
 
 def cmd_integration(args):
-    """INTEGRATION tier — cargo's `tests/` targets.
-
-    `--test <name>` selects ONE of them (the flag this verb carries); with none
-    named the cell is every integration target, which cargo spells `--tests`."""
-    select = [] if args.test else ["--tests"]
-    return cmd_test(args, tier="integration", select=select)
+    """INTEGRATION tier — the crate's `tests/` targets, unless
+    `[profile.integration]` declares the tier. `--test <name>` narrows the
+    run to ONE of them."""
+    return cmd_test(args, tier="integration", kinds=INTEGRATION_KINDS)
 
 
-def cmd_e2e(args):
-    """E2E tier — the nextest PROFILE that carves this tier out
-    (`.config/nextest.toml`), `--profile e2e` by default here.
+def _nextest_config(project_dir):
+    """(PURE) Where a project declares its nextest profiles."""
+    return os.path.join(project_dir, ".config", "nextest.toml")
 
-    The profile is the selection: it is where a project states which tests need
-    the assembled system, and `-P` is how cargo-nextest is told."""
-    return cmd_test(args, tier="e2e")
+
+def _declared_nextest_profiles(project_dir):
+    """The profiles `.config/nextest.toml` declares, as `(names, None)`, or
+    `(None, why)` when the file cannot be read, does not parse, or holds a
+    `profile` key that is not a table. A project with no file declares
+    none."""
+    config = _nextest_config(project_dir)
+    try:
+        with open(config, "rb") as handle:
+            profiles = tomllib.load(handle).get("profile", {})
+    except FileNotFoundError:
+        return set(), None
+    except OSError as error:
+        return None, (f"{config} cannot be read ({error}), so the profile this "
+                      f"run takes cannot be resolved; nothing was run — fix "
+                      f"{config}")
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        return None, (f"{config} does not parse ({error}), so the profile this "
+                      f"run takes cannot be resolved; nothing was run — fix "
+                      f"{config}")
+    if not isinstance(profiles, dict):
+        return None, (f"{config} sets `profile` to a {type(profiles).__name__}, "
+                      f"not the `[profile]` table nextest reads its profiles "
+                      f"from, so the profile this run takes cannot be "
+                      f"resolved; nothing was run — fix {config}")
+    return {name for name, body in profiles.items() if isinstance(body, dict)}, None
+
+
+def _resolve_tier_profile(args, tier, kinds, project_dir):
+    """The profile a split tier's run takes and the kind filter it keeps, as
+    `(profile, kinds, None)`, or `(None, None, why)` when the run is refused.
+
+    A declared `[profile.<tier>]` is the selection: the run takes `-P <tier>`
+    and no kind filter, and an explicit `--profile` against it is refused. An
+    undeclared tier keeps its kind filter and takes an explicit `--profile`
+    the project declares or nextest builds in, else a declared `ci`, else
+    nextest's `default`, always passed explicitly so a `NEXTEST_PROFILE` in
+    the environment changes nothing."""
+    declared, unreadable = _declared_nextest_profiles(project_dir)
+    if declared is None:
+        return None, None, unreadable
+    config = _nextest_config(project_dir)
+    explicit = getattr(args, "profile", None)
+    if tier in declared:
+        if explicit is not None:
+            return None, None, (
+                f"`{tier}` is declared by `[profile.{tier}]` in {config}, and a "
+                f"declared tier always runs its declaration, so `--profile "
+                f"{explicit}` is refused; nothing was run — drop --profile, or "
+                f"remove `[profile.{tier}]`")
+        return tier, None, None
+    if explicit is None:
+        fallback = _CI_PROFILE if _CI_PROFILE in declared else _NEXTEST_BUILTIN_PROFILES[0]
+        return fallback, kinds, None
+    if explicit in declared or explicit in _NEXTEST_BUILTIN_PROFILES:
+        return explicit, kinds, None
+    return None, None, (
+        f"`--profile {explicit}` names a profile the project does not declare "
+        f"and nextest does not build in; nothing was run — add "
+        f"`[profile.{explicit}]` to {config}, or pass one of nextest's own: "
+        f"{', '.join(_NEXTEST_BUILTIN_PROFILES)}")
+
+
+def _selection_expression(kinds, user_filter):
+    """(PURE) The run's one `-E` element: the kind filter narrowed by the
+    user's `--filter`, either alone, or None for neither."""
+    if kinds and user_filter:
+        return f"({kinds}) & ({user_filter})"
+    return kinds or user_filter or None
+
+
+def _list_selection(project_dir, selection, env, own_dir, list_file=_LIST_FILE):
+    """`cargo nextest list` over `selection`, its JSON written to
+    `list_file` in the run's own directory (by default the run's own list
+    file), inside a `ChildRunTiming` bracket whose figures the run folds into
+    its own: `(listed, timing)`."""
+    list_cmd = ["cargo", "nextest", "list", "--message-format", "json", *selection]
+    with _axi().ChildRunTiming() as timing:
+        print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
+        listed = _run_logged(list_cmd, project_dir, env, None, capture=True,
+                             stdout_path=os.path.join(own_dir, list_file))
+    return listed, timing
+
+
+def _selection_empty(project_dir, selection, env, own_dir, list_timing):
+    """Whether the run's own list (already written, and built) names no
+    test its selection holds.
+
+    nextest lists an ignored test as `ignored` before it reads the
+    selection's expression, so a list with no match but an ignored test
+    cannot say whether the selection holds it. Only then the selection is
+    listed once more with `--run-ignored all`, which lists every test by the
+    selection alone. That list only decides: it is kept in its own file and
+    never handed on, and its time is folded into `list_timing`. A list that
+    fails or cannot be read is never an empty selection."""
+    named = _listed_tests(os.path.join(own_dir, _LIST_FILE))
+    if named != (False, True):
+        return named == (False, False)
+    again, timing = _list_selection(project_dir, [*selection, "--run-ignored", "all"],
+                                    env, own_dir, _RUN_IGNORED_LIST_FILE)
+    list_timing.wall += timing.wall
+    list_timing.cpu += timing.cpu
+    if again.returncode != 0:
+        return False
+    named = _listed_tests(os.path.join(own_dir, _RUN_IGNORED_LIST_FILE))
+    return named is not None and not named[0]
+
+
+def _listed_tests(list_path):
+    """What the nextest list at `list_path` names, as `(matching, ignored)`:
+    whether a testcase's `filter-match` is `matches`, and whether one is a
+    mismatch for its `#[ignore]` alone. None when the list cannot be read."""
+    try:
+        with open(list_path, encoding="utf-8") as handle:
+            listed = json.load(handle)
+    except (OSError, ValueError) as error:
+        print(f"[crucible] WARN: the test list {list_path} could not be read "
+              f"({error}); the selection is not checked for emptiness",
+              file=sys.stderr)
+        return None
+    matches = list(_filter_matches(listed))
+    return (any(m.get("status") == "matches" for m in matches),
+            any(m.get("status") == "mismatch" and m.get("reason") == "ignored"
+                for m in matches))
+
+
+def _filter_matches(listed):
+    """(PURE) Each testcase's `filter-match` in a parsed nextest list, `{}`
+    for one that carries none."""
+    suites = listed.get("rust-suites") if isinstance(listed, dict) else None
+    for suite in suites.values() if isinstance(suites, dict) else ():
+        cases = suite.get("testcases") if isinstance(suite, dict) else None
+        for case in cases.values() if isinstance(cases, dict) else ():
+            match = case.get("filter-match") if isinstance(case, dict) else None
+            yield match if isinstance(match, dict) else {}
+
+
+def _empty_selection_refusal(tier, kinds, user_filter):
+    """(PURE) What a kind-filter selection that lists no test says."""
+    narrowed = f", narrowed by --filter `{user_filter}`," if user_filter else ""
+    return (f"`{tier}` selects its tests with the kind filter `{kinds}`"
+            f"{narrowed} and `cargo nextest list` names no test it selects; "
+            f"nothing was run — declare `[profile.{tier}]` in "
+            f".config/nextest.toml to state this tier's tests yourself")
+
+
+def _refuse_tier_run(verb, project_dir, agent, refusal, code=None):
+    """A tier run refused before anything ran or was filed: ONE `ok: false`
+    envelope naming why (and its `code`, when it has one). Returns the exit."""
+    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+    fields = {"run": _UNFILED_RUN, "error": refusal}
+    if code:
+        fields["code"] = code
+    fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]
+    _emit_axi(verb, False, fields, _axi_context(project_dir, agent_id=agent), [],
+              f"{verb}: ok=False — {refusal}")
+    return 1
 
 
 def cmd_check(args):
@@ -2670,15 +2881,14 @@ def _add_reports_arg(p):
 # BDD form, so those cells are DECLARED, and the surface a cargo project has
 # for naming a run of its own is a nextest profile.
 def _add_declared_tier_args(p):
-    """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
-    siblings (`unit`/`integration`/`e2e`) already take, so the instruction a
+    """§S6 ruling 4 — a DECLARED cell's flag surface: the cargo run flags its
+    test-running siblings (`unit`/`integration`) take, so the instruction a
     refusal gives can actually be typed (AC14b).
 
-    `--profile` is deliberately NOT here where those three carry it: on a
-    declared cell the profile IS the declaration, read from
-    `.config/nextest.toml` by the tier's own name, and a flag that could point
-    somewhere else would be a second source of truth for the one fact this
-    cell exists to detect."""
+    It takes no `--profile`: on a declared cell the profile IS the
+    declaration, read from `.config/nextest.toml` by the tier's own name, and
+    a flag that could point somewhere else would be a second source of truth
+    for the one fact this cell exists to detect."""
     _add_cargo_tier_run_args(p)
 
 
@@ -2808,23 +3018,24 @@ def _add_cargo_tier_run_args(p):
     _add_reports_arg(p)
 
 
+_SPLIT_TIER_PROFILE_HELP = (
+    "Nextest profile for an undeclared tier: one `.config/nextest.toml` "
+    "declares, or nextest's built-in `default`/`default-miri` (default: a "
+    "declared `ci`, else `default`). Refused when the tier declares its own "
+    "`[profile.<tier>]`.")
+
+
 def _add_unit_tier_args(p):
     _add_cargo_tier_run_args(p)
-    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--profile", default=None, help=_SPLIT_TIER_PROFILE_HELP)
 
 
 def _add_integration_tier_args(p):
     _add_cargo_tier_run_args(p)
-    p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
+    p.add_argument("--profile", default=None, help=_SPLIT_TIER_PROFILE_HELP)
     p.add_argument("--test",
                    help="A single `tests/<name>.rs` integration target (cargo --test <name>); "
-                        "default: every integration target (cargo --tests)")
-
-
-def _add_e2e_tier_args(p):
-    _add_cargo_tier_run_args(p)
-    p.add_argument("--profile", default="e2e",
-                   help="Nextest profile carving out this tier (default: e2e)")
+                        "default: every integration target")
 
 
 # CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
@@ -3429,10 +3640,10 @@ def main():
 
     # ── CR-CRU-111 §S1/§S3 — the SIX tier verbs, from the fleet's own
     # registrar. rust is the one client with no pre-existing tier-named verb,
-    # so nothing migrates here. Cargo splits three of them itself (`--lib`,
-    # the `tests/` targets, a nextest profile) and those three RUN; `regression`
-    # runs the workspace regression this client already ships (§S6 ruling 3);
-    # `module` and `bdd` are cells cargo describes no distinction for, so they
+    # so nothing migrates here. Nextest's binary kinds split two of them
+    # (`unit`, `integration`) and those two RUN; `regression` runs the
+    # workspace regression this client already ships (§S6 ruling 3); `module`,
+    # `bdd` and `e2e` are cells cargo describes no distinction for, so they
     # DETECT a declared nextest profile and refuse only while there is none. A `dict(...)`
     # rather than a `{...}` literal, deliberately: a client dict keyed by tier
     # NAMES would be the second copy of the vocabulary AC10 forbids.
@@ -3442,19 +3653,21 @@ def main():
         # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
         dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
-                 "Runs `cargo nextest run --lib` — cargo's own in-crate unit "
-                 "target — and streams the run.",
+                 "Runs the crate's in-crate tests (`-E 'kind(lib) | kind(bin) | "
+                 "kind(proc-macro)'`, narrowed by --filter), or a declared "
+                 "`[profile.unit]` instead, and streams the run. An undeclared "
+                 "tier runs --profile, else a declared `ci`, else `default`; a "
+                 "selection that lists no test is refused (tier-selection-empty).",
                  (_add_unit_tier_args,)),
              integration=tier_verb(
                  cmd_integration,
-                 "Runs cargo's `tests/` integration targets "
-                 "(`--test <name>`, else `--tests`) and streams the run.",
+                 "Runs the crate's `tests/` targets (`-E 'kind(test)'`, "
+                 "narrowed by --filter and --test), or a declared "
+                 "`[profile.integration]` instead, and streams the run. An "
+                 "undeclared tier runs --profile, else a declared `ci`, else "
+                 "`default`; a selection that lists no test is refused "
+                 "(tier-selection-empty).",
                  (_add_integration_tier_args,)),
-             e2e=tier_verb(
-                 cmd_e2e,
-                 "Runs the nextest profile that carves out this tier "
-                 "(`-P e2e`) and streams the run.",
-                 (_add_e2e_tier_args,)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the workspace regression (`cargo nextest run "
