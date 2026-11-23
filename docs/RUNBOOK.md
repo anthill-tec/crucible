@@ -422,6 +422,45 @@ format = "ruff"
 The ruff rule set itself is the tracked `pyproject.toml`'s. The gate then lints the checkout's python before its
 tests.
 
+## Unit check
+
+A project may declare a unit-check stage for its gate, in a `[unit-check]` table of the same `crucible.toml`. Each
+client's `pre-merge-gate` runs it right after its lint stage, in the directory lint ran in (bun: its package
+directory), and before the regression: after lint in python, bun and arduino, before the regression in rust and go,
+and before docker-up in maven.
+
+```toml
+[unit-check]
+command = ["scripts/hermetic/unit-check.sh"]
+```
+
+- `command` is required: a non-empty list of non-empty strings. Its first word resolves as `[lint]`'s does.
+- `name` is optional: the stage's name in the envelope. Without it the stage is named by the basename of the
+  command's first word.
+- A malformed table (`command` missing, not a list, empty, or holding an empty or non-string entry; `name` not a
+  non-empty string) stops the gate at `stage: unit-check`, with an `error` naming the file and the field. Nothing
+  runs.
+- The command runs with the gate's environment unchanged: the client adds no variable and loads no hook.
+
+Exit 0 lets the gate go on. Any other exit stops it: the gate's one envelope reads `ok: false`, `stage: unit-check`,
+the command's `exit`, and the warning `unit-check-gate-abort`, with a `help` line naming the stage. The command's
+output goes to stderr, and no regression is started or filed. The stage files nothing on the board of its own; the
+gate's envelope carries it.
+
+With no table the gate goes on with a `unit-check-not-declared` warning. `--skip-unit-check` skips a declared
+stage; neither `--skip-lint` nor `--skip-check` skips it.
+
+**This checkout's own table.** Crucible's gate checks its two unit tiers as CI does, with the recording hooks loaded
+and `unit-verdict.py` judging the logs (`scripts/hermetic/README.md`). The root `crucible.toml` is git-ignored, so a
+new checkout adds the table itself, beside `[lint]`:
+
+```toml
+[unit-check]
+command = ["scripts/hermetic/unit-check.sh"]
+```
+
+CI's `test-bun` and `test-python` jobs run the same script, one tier each, inside `scripts/hermetic/run.sh`.
+
 ## Rust tier verbs
 
 The rust client's `unit` and `integration` verbs run without any declaration. Nextest names the kind of every
