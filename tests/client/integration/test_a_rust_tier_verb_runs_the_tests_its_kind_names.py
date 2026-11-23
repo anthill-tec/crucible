@@ -490,6 +490,20 @@ class TheUndeclaredTiersProfileChainTest(_RustKindsProject):
         result = self.drive("integration")
         self.assertRefusedBeforeAnythingRan(result, ".config/nextest.toml")
 
+    def test_a_config_that_is_not_utf8_is_refused_naming_the_file(self):
+        self.nextest_config.parent.mkdir(parents=True, exist_ok=True)
+        self.nextest_config.write_bytes(b'[profile.ci]\ndefault-filter = "\xff"\n')
+        result = self.drive("unit", agent="rust-chain-not-utf8")
+        self.assertRefusedBeforeAnythingRan(result, ".config/nextest.toml")
+
+    def test_a_profile_key_that_is_not_a_table_is_refused_naming_the_table(self):
+        """Valid TOML that nextest itself rejects: refused before anything
+        runs, so it is never filed as a compile failure."""
+        self.nextest_config.parent.mkdir(parents=True, exist_ok=True)
+        self.nextest_config.write_text('profile = "x"\n')
+        result = self.drive("integration", agent="rust-chain-profile-not-a-table")
+        self.assertRefusedBeforeAnythingRan(result, ".config/nextest.toml", "[profile]")
+
     def test_a_targets_entry_is_still_checked_when_the_chain_picks_ci(self):
         """Passes today, when `ci` is the parser's default: the guard that the
         chain hands `_targets_refusal` the profile it resolved."""

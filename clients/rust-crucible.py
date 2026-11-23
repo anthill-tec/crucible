@@ -1527,24 +1527,28 @@ def _nextest_config(project_dir):
 
 def _declared_nextest_profiles(project_dir):
     """The profiles `.config/nextest.toml` declares, as `(names, None)`, or
-    `(None, why)` when the file cannot be read or does not parse. A project
-    with no file declares none."""
+    `(None, why)` when the file cannot be read, does not parse, or holds a
+    `profile` key that is not a table. A project with no file declares
+    none."""
     config = _nextest_config(project_dir)
     try:
         with open(config, "rb") as handle:
-            profiles = (tomllib.load(handle) or {}).get("profile") or {}
+            profiles = tomllib.load(handle).get("profile", {})
     except FileNotFoundError:
         return set(), None
     except OSError as error:
         return None, (f"{config} cannot be read ({error}), so the profile this "
                       f"run takes cannot be resolved; nothing was run — fix "
                       f"{config}")
-    except tomllib.TOMLDecodeError as error:
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         return None, (f"{config} does not parse ({error}), so the profile this "
                       f"run takes cannot be resolved; nothing was run — fix "
                       f"{config}")
     if not isinstance(profiles, dict):
-        return set(), None
+        return None, (f"{config} sets `profile` to a {type(profiles).__name__}, "
+                      f"not the `[profile]` table nextest reads its profiles "
+                      f"from, so the profile this run takes cannot be "
+                      f"resolved; nothing was run — fix {config}")
     return {name for name, body in profiles.items() if isinstance(body, dict)}, None
 
 
