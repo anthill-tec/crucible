@@ -1123,13 +1123,16 @@ def _written_reports(maven_dir, module, kinds, reports_dir, since):
 
 
 def _selection_is_empty(result, paths):
-    """Whether a tier run's selection ran no test: maven exited 0 and the
-    reports the verb reads (`paths`) hold no test case, or maven failed with
-    surefire's or failsafe's "No tests matching pattern". A report whose
+    """Whether a tier run's selection ran no test: the reports the verb reads
+    (`paths`) hold no test case, and either maven exited 0 or it failed with
+    surefire's or failsafe's "No tests matching pattern". A reactor whose one
+    module matches nothing fails with that message after another module ran
+    its tests, so the message alone never makes a run empty. A report whose
     count cannot be read is never an empty selection."""
-    if result.returncode == 0:
-        return _axi().junit_testcase_count(paths) == 0
-    return _NO_TESTS_MATCHING in (getattr(result, "stdout", None) or "")
+    if _axi().junit_testcase_count(paths) != 0:
+        return False
+    return (result.returncode == 0
+            or _NO_TESTS_MATCHING in (getattr(result, "stdout", None) or ""))
 
 
 def _refuse_empty_selection(label, kinds, args, project_dir, run_id, warnings):
