@@ -466,6 +466,26 @@ class E2eAndBddAreDeclaredOnlyTest(_MavenTierProject):
         """Passes today: the guard that `bdd` stays declared-only."""
         self.assertUndeclared(self.drive("bdd", agent="mvn-bdd-undeclared"), "-Pbdd")
 
+    def runs_today(self, result):
+        """The help line of a `tier-run-undeclared` refusal that names the
+        tier verbs this client runs."""
+        lines = [str(line) for line in self.envelope_of(result).get("help") or []
+                 if str(line).startswith("tier verbs this client runs today")]
+        self.assertEqual(len(lines), 1, self.where(result))
+        return lines[0] if lines else None
+
+    def test_an_undeclared_bdd_names_the_tiers_an_undeclared_e2e_names(self):
+        bdd = self.runs_today(self.drive("bdd"))
+        e2e = self.runs_today(self.drive("e2e"))
+        self.assertEqual(bdd, "tier verbs this client runs today: integration, regression, unit")
+        self.assertEqual(bdd, e2e)
+
+    def test_an_undeclared_bdd_names_a_tier_the_project_declares(self):
+        self.declare_profiles("module")
+        self.assertEqual(self.runs_today(self.drive("bdd")),
+                         "tier verbs this client runs today: integration, module, "
+                         "regression, unit")
+
     def test_a_declared_e2e_failsafe_only_files_only_the_failsafe_reports_its_run_wrote(self):
         self.declare_profiles("e2e")
         target = Path(self.project, "target")
@@ -496,16 +516,23 @@ class TheProfileFlagIsCheckedBeforeMavenRunsTest(_MavenTierProject):
     directory and no `~/.m2/settings.xml` declares, are refused before maven
     runs; `?id` and `!id` pass through."""
 
+    def assertErrorNamesTheDeclaredProfile(self, axi, tier):
+        error = str(axi.get("error") or "")
+        self.assertIn(f"`{tier}` profile", error, f"envelope={axi!r}")
+        self.assertIn(os.path.join(self.project, "pom.xml"), error, f"envelope={axi!r}")
+
     def test_a_profile_on_a_tier_with_a_declared_profile_is_refused_naming_it(self):
         self.declare_profiles("integration", "coverage")
         result = self.drive("integration", "--profile", "coverage",
                             agent="mvn-profile-declared-tier")
-        self.assertRefusedBeforeMavenRan(result, "integration")
+        axi = self.assertRefusedBeforeMavenRan(result, "coverage")
+        self.assertErrorNamesTheDeclaredProfile(axi, "integration")
 
     def test_a_profile_on_a_declared_unit_tier_is_refused_without_an_agent(self):
         self.declare_profiles("unit", "coverage")
         result = self.drive("unit", "--profile", "coverage")
-        self.assertRefusedBeforeMavenRan(result, "unit")
+        axi = self.assertRefusedBeforeMavenRan(result, "coverage")
+        self.assertErrorNamesTheDeclaredProfile(axi, "unit")
 
     def test_an_undeclared_profile_id_is_refused_naming_the_id(self):
         result = self.drive("unit", "--profile", "nosuchprofile", agent="mvn-profile-unknown")
@@ -527,6 +554,20 @@ class TheProfileFlagIsCheckedBeforeMavenRunsTest(_MavenTierProject):
         (build / "pom.xml").write_text(_pom(["builtonly"]))
         result = self.drive("unit", "--profile", "builtonly", agent="mvn-profile-target")
         self.assertRefusedBeforeMavenRan(result, "builtonly")
+
+    def test_an_id_declared_only_under_a_hidden_directory_is_refused(self):
+        hidden = Path(self.project, ".cache", "copy")
+        hidden.mkdir(parents=True)
+        (hidden / "pom.xml").write_text(_pom(["hiddenonly"]))
+        result = self.drive("unit", "--profile", "hiddenonly", agent="mvn-profile-hidden")
+        self.assertRefusedBeforeMavenRan(result, "hiddenonly")
+
+    def test_an_id_declared_only_under_node_modules_is_refused(self):
+        vendored = Path(self.project, "node_modules", "pkg")
+        vendored.mkdir(parents=True)
+        (vendored / "pom.xml").write_text(_pom(["vendoredonly"]))
+        result = self.drive("unit", "--profile", "vendoredonly", agent="mvn-profile-vendored")
+        self.assertRefusedBeforeMavenRan(result, "vendoredonly")
 
     def test_an_id_declared_in_the_root_pom_runs_with_it(self):
         """Passes today: the guard that a declared id is not refused."""
@@ -562,6 +603,16 @@ class TheProfileFlagIsCheckedBeforeMavenRunsTest(_MavenTierProject):
         """Passes today: `!x` is maven's to resolve."""
         result = self.drive("unit", "--profile", "!x", agent="mvn-profile-deactivate")
         self.assertEqual(_profiles(self.the_one_mvn_call(result)), ["!x"], self.where(result))
+
+    def test_a_minus_deactivated_id_passes_through_unchecked(self):
+        """Maven's older `-x` deactivation is maven's to resolve."""
+        result = self.drive("unit", "--profile=-x", agent="mvn-profile-minus")
+        self.assertEqual(_profiles(self.the_one_mvn_call(result)), ["-x"], self.where(result))
+
+    def test_a_plus_activated_id_passes_through_unchecked(self):
+        """Maven's older `+x` activation is maven's to resolve."""
+        result = self.drive("unit", "--profile=+x", agent="mvn-profile-plus")
+        self.assertEqual(_profiles(self.the_one_mvn_call(result)), ["+x"], self.where(result))
 
 
 # ── AC5 — an empty selection is refused ────────────────────────────────────
@@ -625,6 +676,109 @@ class AnEmptySelectionIsRefusedTest(_MavenTierProject):
 
     def test_unit_with_a_pattern_matching_nothing_is_empty_without_an_agent(self):
         self.assertSelectionEmpty(self.drive("unit", "--test", "Nope"))
+
+    def test_an_empty_undeclared_unit_advises_declaring_a_unit_profile(self):
+        result = self.drive("unit", "--test", "Nope", agent="mvn-empty-advice")
+        self.assertSelectionEmpty(result, "declare a `unit` profile", agent="mvn-empty-advice")
+
+    def test_an_empty_declared_unit_does_not_advise_declaring_its_profile(self):
+        self.declare_profiles("unit")
+        result = self.drive("unit", "--test", "Nope", agent="mvn-empty-declared")
+        self.assertSelectionEmpty(result, agent="mvn-empty-declared")
+        self.assertNotIn("declare a `unit` profile", _said(self.envelope_of(result)),
+                         self.where(result))
+
+    def test_an_empty_declared_e2e_failsafe_only_does_not_advise_declaring_its_profile(self):
+        self.declare_profiles("e2e")
+        self.project_without_failsafe_tests()
+        result = self.drive("e2e", "--failsafe-only", agent="mvn-empty-declared-e2e")
+        self.assertSelectionEmpty(result, "failsafe", agent="mvn-empty-declared-e2e")
+        self.assertNotIn("declare a `e2e` profile", _said(self.envelope_of(result)),
+                         self.where(result))
+
+
+class AReactorModuleThatMatchesNothingIsNotAnEmptySelectionTest(_MavenTierProject):
+    """A reactor whose `alpha` runs FooTest and whose `gamma` holds only
+    GammaTest: `unit --test FooTest` runs FooTest, then surefire fails in
+    `gamma` with "No tests matching pattern". The run ran a test, so it is
+    not an empty selection: FooTest is filed and the run is not aborted."""
+
+    def setUp(self):
+        super().setUp()
+        self.model["modules"] = [
+            {"name": m, "tests": [test], "its": [], "failsafe": False}
+            for m, test in (("alpha", FOO_TEST), ("gamma", "live.GammaTest#adds"))]
+        for module in ("alpha", "gamma"):
+            Path(self.project, module).mkdir()
+            Path(self.project, module, "pom.xml").write_text(_pom(artifact=module))
+
+    def test_with_an_agent_foo_test_is_filed_and_the_run_is_not_aborted(self):
+        result = self.drive("unit", "--test", "FooTest", agent="mvn-reactor-unmatched")
+        self.assertNotIn(TIER_SELECTION_EMPTY, _codes(self.envelope_of(result)),
+                         self.where(result))
+        self.assertFiledUnder(result, "unit", ["live.FooTest"])
+        self.assertEqual(self.board.aborts(), [], f"no run aborted; {self.where(result)}")
+        self.assertEqual(self.posts_to(COMPILE), [], f"no compile record; {self.where(result)}")
+        self.assertNotEqual(result.returncode, 0, f"maven failed; {self.where(result)}")
+
+    def test_without_an_agent_the_run_is_not_an_empty_selection(self):
+        result = self.drive("unit", "--test", "FooTest")
+        self.assertNotIn(TIER_SELECTION_EMPTY, _codes(_envelope(result.stdout)),
+                         self.where(result))
+        self.assertNotIn(TIER_SELECTION_EMPTY, result.stderr, self.where(result))
+        self.assertEqual(len(self.mvn_calls()), 1, self.where(result))
+        self.assertNotEqual(result.returncode, 0, f"maven failed; {self.where(result)}")
+        self.assertEqual(self.board.posts(), [], f"nothing posted; {self.where(result)}")
+
+
+# ── S9 — the help says what each verb runs ─────────────────────────────────
+
+
+class TheHelpSaysWhatEachVerbRunsTest(_MavenTierProject):
+    """The root listing's `bdd` line names the declared profile's run, each
+    tier verb's own `--help` says what it runs, and `--profile`'s help names
+    when it is refused."""
+
+    def help_of(self, *argv):
+        env = scrubbed_env(self.bin_dir)
+        for key in _SCRUBBED:
+            env.pop(key, None)
+        env["HOME"] = self.home
+        result = subprocess.run([sys.executable, str(MVN_CLIENT), *argv, "--help"],
+                                cwd=self.project, env=env, capture_output=True,
+                                text=True, timeout=TIMEOUT, check=False)
+        self.assertEqual(result.returncode, 0, self.where(result))
+        return result.stdout
+
+    def test_the_root_listing_says_a_declared_bdd_profile_runs_clean_verify(self):
+        said = " ".join(self.help_of().split())
+        self.assertIn("`mvn clean verify -Pbdd`", said)
+        self.assertNotIn("No target for it is declared", said)
+
+    def test_each_tier_verbs_own_help_says_what_it_runs(self):
+        for verb, runs in (("unit", "`mvn clean test`"),
+                           ("module", "`mvn clean test -pl <module> [-am]`"),
+                           ("integration", "-Dsurefire.failIfNoSpecifiedTests=false"),
+                           ("e2e", "`mvn clean verify -Pe2e`"),
+                           ("bdd", "`mvn clean verify -Pbdd`")):
+            with self.subTest(verb=verb):
+                self.assertIn(runs, " ".join(self.help_of(verb).split()))
+
+    def test_the_profile_flags_help_names_when_it_is_refused(self):
+        for verb in ("unit", "module", "integration", "e2e", "bdd"):
+            with self.subTest(verb=verb):
+                lines = self.help_of(verb).splitlines()
+                start = next((i for i, line in enumerate(lines)
+                              if line.lstrip().startswith("--profile")), None)
+                self.assertIsNotNone(start, f"{verb} --help lists --profile")
+                block = [lines[start or 0]]
+                for line in lines[(start or 0) + 1:]:
+                    if line.lstrip().startswith("-") or not line.strip():
+                        break
+                    block.append(line)
+                said = " ".join(" ".join(block).split())
+                self.assertIn("refused", said, f"{verb}: {said!r}")
+                self.assertIn("settings.xml", said, f"{verb}: {said!r}")
 
     def test_a_real_compile_error_still_files_its_compile_record(self):
         """Passes today: the guard that a build failure is never empty."""
