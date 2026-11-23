@@ -661,6 +661,11 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
         """`e2e --with-docker --agent` refuses an unattributable run before it
         touches docker; with `--cycle` and no board declared it refuses at the
         same point, so neither docker nor maven is spawned."""
+        # `e2e` runs only a declared profile.
+        (self.project_dir / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+            '</modelVersion><profiles><profile><id>e2e</id></profile></profiles>'
+            '</project>\n')
         drive = run_client(
             "mvn",
             ["e2e", "--with-docker", "--agent", AGENT, "--cycle", "1",

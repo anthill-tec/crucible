@@ -145,6 +145,15 @@ def _write_script(path, body):
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IRUSR)
 
 
+def _declare_module_profile(project):
+    """A pom.xml declaring a `module` profile: `module` with no `--module`
+    runs only a declared profile."""
+    Path(project, "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+        '</modelVersion><profiles><profile><id>module</id></profile></profiles>'
+        '</project>\n')
+
+
 class _FakeMavenProject:
     """A scratch maven project with a fake `mvnw`, driven through the real
     client."""
@@ -300,6 +309,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
 
     def test_module_over_two_report_files_whose_build_exits_1_files_the_runner_case(self):
         # Two report files pooled in the run's own directory, both sent.
+        _declare_module_profile(self.project)
         self.assert_filed_red_with_the_runner_case(
             "module", "mvn-runner-exit-module-pooled", classes=2)
 
@@ -331,6 +341,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
             "unit", "mvn-runner-exit-unit-failing", classes=1)
 
     def test_module_over_a_failing_report_exits_non_zero(self):
+        _declare_module_profile(self.project)
         self.assert_failing_report_exits_non_zero(
             "module", "mvn-runner-exit-module-failing", classes=2)
 
@@ -409,6 +420,7 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
                             FAKE_EXIT="1")
 
     def test_a_module_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
+        _declare_module_profile(self.project)
         self.assert_carries("module", "mvn-carry-module", RAW_INGEST, 1,
                             classes=2, FAKE_EXIT="1")
 
@@ -469,6 +481,7 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
         self.assert_no_report_exits_non_zero("unit", "mvn-no-report-unit")
 
     def test_module_whose_build_exits_1_with_no_report_exits_non_zero(self):
+        _declare_module_profile(self.project)
         self.assert_no_report_exits_non_zero("module", "mvn-no-report-module")
 
     def test_integration_whose_build_exits_1_with_no_report_exits_non_zero(self):

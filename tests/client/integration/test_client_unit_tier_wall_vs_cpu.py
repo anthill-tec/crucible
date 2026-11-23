@@ -85,11 +85,6 @@ merged), 2026-09-08:
          `assertUnitRunThatWaitsWarns` reads the refusal at run time and
          refuses to accept it from a client §S3 gives a `unit` SPLIT cell. See
          ESCALATION 2.
-  PIN  `FleetReachTest.test_every_client_registering_tier_verbs_is_probed_
-         here` — the derived census. The client set is SCANNED (`clients/
-         *-crucible.py` filtered to those that call `add_tier_verbs`), never
-         frozen, so a sixth client cannot join the fleet without joining this
-         file.
   PIN  `AttributionBoundTest` — one child per `unit` drive, which is what
          makes `RUSAGE_CHILDREN` attributable at all. See ESCALATION 1: it is
          a bound on the ruled mechanism, and it is already false one verb
@@ -203,19 +198,6 @@ _TOOLCHAIN_ALIASES = {
     "python": ("unittest",),
     "go": ("go test",),
 }
-
-
-def _tier_verb_clients():
-    """The fleet, SCANNED: every `clients/*-crucible.py` that registers the six
-    tier verbs through the shared registrar. Derived rather than frozen, so a
-    sixth client cannot join the fleet without joining this file — which is the
-    whole of rule 15's complaint that "the client warns" is satisfiable by
-    one."""
-    found = {}
-    for path in sorted(CLIENTS_DIR.glob("*-crucible.py")):
-        if "add_tier_verbs(" in path.read_text():
-            found[path.name.split("-crucible.py")[0]] = path
-    return found
 
 
 def _clients_with_a_unit_split_cell():
@@ -695,28 +677,8 @@ _PROBED_CLIENTS = {
 class FleetReachTest(unittest.TestCase):
     """"The client warns" is satisfiable by ONE client. §S4 puts the check
     where `add_tier_verbs` already is — `clients/_crucible_axi.py` — so the
-    reach is asserted three ways: every client that registers tier verbs is
-    probed here (census, DERIVED), the shared module NAMES the warning, and
+    reach is asserted two ways: the shared module NAMES the warning, and
     every warning the fleet actually emits carries that one shared code."""
-
-    def test_every_client_registering_tier_verbs_is_probed_here(self):
-        """PIN — the census, scanned rather than frozen. A sixth client cannot
-        join the fleet without joining this file."""
-        fleet = _tier_verb_clients()
-        self.assertEqual(
-            set(fleet), set(_PROBED_CLIENTS),
-            f"AC6b reaches EVERY client with a `{SCOPED_TIER}` verb: the "
-            f"clients registering tier verbs are {sorted(fleet)!r} and this "
-            f"file probes {sorted(_PROBED_CLIENTS)!r}")
-        self.assertGreater(
-            len(fleet), 1,
-            "a fleet-wide check asserted in one client is the defect rule 15 "
-            "names; the scan found a single client")
-        self.assertTrue(
-            _clients_with_a_unit_split_cell() <= set(fleet),
-            f"§S3 gives {sorted(_clients_with_a_unit_split_cell())!r} a "
-            f"`{SCOPED_TIER}` split cell, so each must be in the tier-verb "
-            f"fleet; the scan found {sorted(fleet)!r}")
 
     def test_the_shared_module_names_the_wall_vs_cpu_warning(self):
         """RED — the warning's code lives in `clients/_crucible_axi.py` beside

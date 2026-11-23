@@ -475,6 +475,65 @@ answers `tier-run-undeclared` otherwise. `e2e` takes no `--profile`.
 `test`, `regression` and `pre-merge-gate` keep `-P ci` (their `--profile` default), and still fail on a crate
 with no `[profile.ci]`.
 
+## Maven tier verbs
+
+The maven client's tier verbs hand Maven the split its own plugins make: surefire runs `*Test`, failsafe runs
+`*IT`. With no declared profile, each verb runs this:
+
+| Verb | Argv | Files |
+|---|---|---|
+| `unit` | `mvn clean test`, plus `-Dtest=<pattern>` only with `--test` | surefire's reports |
+| `module` | `mvn clean test -pl <m> [-am]`, from `--module <m>` | surefire's reports |
+| `integration` | `mvn clean verify -Dtest='!*' -Dsurefire.failIfNoSpecifiedTests=false` | failsafe's reports |
+| `e2e`, `bdd` | nothing: the verb answers `tier-run-undeclared` | nothing |
+
+- **`integration` runs failsafe alone.** Surefire selects nothing, failsafe runs the integration tests, and
+  failsafe's own `verify` decides the verdict. A `--system-prop` that sets `test` is refused before anything runs;
+  use failsafe's own `it.test` to narrow it.
+- **`module` needs a module.** With neither `--module` nor a declared `module` profile it answers
+  `tier-run-undeclared`, and its help names both ways to run it.
+- The user's Maven flags (`--module`, `--also-make` and so on) ride every argv.
+
+**A declared profile wins.** A profile in the maven directory's `pom.xml` whose id is the tier takes that verb over:
+
+| Verb | Argv |
+|---|---|
+| `unit`, `module` | `mvn clean test -P<tier>` |
+| `integration`, `e2e`, `bdd` | `mvn clean verify -P<tier>` |
+
+The profile decides what runs, so the run files every surefire and failsafe report it wrote, and `-Dtest='!*'` is
+not added. `unit --test` and `module --module` still apply. `-P<tier>` turns off any `activeByDefault` profile: a
+project that relies on one must list it inside the tier's profile, or activate it some other way.
+
+A declared `e2e` keeps `--with-docker`, `--compose-file`, `--no-wait` and `--failsafe-only`. `e2e --failsafe-only`
+runs `failsafe:integration-test failsafe:verify -Pe2e` without `clean`, and files only the failsafe reports written
+after the run started.
+
+**The `--profile` rule**, checked before anything runs on `unit`, `module`, `integration`, `e2e` and `bdd`:
+
+- On a tier with a declared profile, any `--profile` is refused, naming the declared profile.
+- On an undeclared tier, each id is refused, naming it, unless it is declared in a `pom.xml` under the maven
+  directory (nothing under a `target/`, `node_modules/` or hidden directory counts) or in `~/.m2/settings.xml`.
+- A comma list (`--profile a,b`) is checked id by id. An id written `?id` (optional), `!id` or `-id` (deactivated),
+  or `+id` (activated) is passed to Maven unchecked. Write a leading `-` as `--profile=-id`, so the flag is not
+  read as another option.
+- A profile declared only in a parent POM outside the project is refused: declare it in the project, or pass
+  `?id`.
+
+`regression` and `pre-merge-gate` take any `--profile`, as before.
+
+**An empty selection is refused.** Maven has no list step, so the check is made after Maven exits and before
+anything is filed, with or without `--agent`. A selection is empty when Maven exits 0 and the reports the verb reads
+hold no test case, or when Maven fails with surefire's or failsafe's "No tests matching pattern". The answer is
+`ok: false` with code `tier-selection-empty`, and the exit is 1. On a project without failsafe, `integration` answers
+empty, naming failsafe. With `--agent`, the opened run is aborted and its identity closed; no compile record is
+filed and Maven is not run again. A run with no report whose console has no such message is still a build failure,
+and files its compile record as before.
+
+**`regression` and the gate are one run.** `regression` is one `mvn clean verify`, filed under `regression`. The
+gate's maven leg is that one run with no profile, so its `suites[]` row for a declared profile says the profile was
+not activated.
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server

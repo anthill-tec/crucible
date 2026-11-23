@@ -390,11 +390,11 @@ class EveryReportIngestingVerbWithZeroResultsAbortsTheRunTest(_ZeroResultCase):
              "--agent", AGENT],
             self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
 
-    def _mvn(self, verb, exit_code):
+    def _mvn(self, verb, exit_code, *extra):
         write_fake_mvnw(self.project)
         write_fake_docker(self.bin_dir)
         return self.run_client(
-            [sys.executable, str(CLIENTS / "mvn-crucible.py"), verb,
+            [sys.executable, str(CLIENTS / "mvn-crucible.py"), verb, *extra,
              "--project-dir", self.project, "--reports", "reports",
              "--agent", AGENT],
             self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE=str(exit_code)))
@@ -433,12 +433,18 @@ class EveryReportIngestingVerbWithZeroResultsAbortsTheRunTest(_ZeroResultCase):
         self.assert_aborted_never_filed(self._mvn("unit", 1), 1)
 
     def test_mvn_module(self):
-        self.assert_aborted_never_filed(self._mvn("module", 1), 1)
+        # `module` runs only with a `--module` (or a declared profile).
+        self.assert_aborted_never_filed(self._mvn("module", 1, "--module", "probe"), 1)
 
     def test_mvn_integration(self):
         self.assert_aborted_never_filed(self._mvn("integration", 1), 1)
 
     def test_mvn_e2e(self):
+        # `e2e` runs only a declared profile.
+        with open(f"{self.project}/pom.xml", "w", encoding="utf-8") as pom:
+            pom.write('<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>'
+                      '4.0.0</modelVersion><profiles><profile><id>e2e</id></profile>'
+                      '</profiles></project>\n')
         self.assert_aborted_never_filed(self._mvn("e2e", 1), 1)
 
     def test_mvn_regression(self):

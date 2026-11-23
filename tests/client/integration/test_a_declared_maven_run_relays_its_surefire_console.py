@@ -247,12 +247,14 @@ with open(os.environ["FAKE_DOCKER_LOG"], "a") as log:
 sys.exit(0)
 '''
 
-# A POM declaring the `bdd` profile, so `bdd` reaches its declared-profile cell.
+# A POM declaring the verb's own profile, so `bdd`, `e2e` and `module` (run
+# with no `--module`) reach their declared-profile cell.
 _POM = ('<?xml version="1.0" encoding="UTF-8"?>\n'
         '<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
         '  <modelVersion>4.0.0</modelVersion>\n'
-        '  <profiles><profile><id>bdd</id></profile></profiles>\n'
+        '  <profiles><profile><id>{tier}</id></profile></profiles>\n'
         '</project>\n')
+_DECLARED_VERBS = ("bdd", "e2e", "module")
 
 
 def _write_script(path, body):
@@ -410,8 +412,8 @@ class _MavenProject(unittest.TestCase):
         client is sent SIGINT instead."""
         self._drives += 1
         pom = Path(self.project, "pom.xml")
-        if verb == "bdd":
-            pom.write_text(_POM)
+        if verb in _DECLARED_VERBS:
+            pom.write_text(_POM.format(tier=verb))
         else:
             pom.unlink(missing_ok=True)
         cmd = self.command(verb, *extra, agent=agent)

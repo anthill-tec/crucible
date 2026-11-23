@@ -339,6 +339,11 @@ class E2eOnTheWireTest(_MvnModalityCase, _TierOnTheWire):
     METHOD = "test_a_failsafe_it_run_states_e2e_on_the_wire"
 
     def observe(self):
+        # `e2e` runs only a declared profile.
+        Path(self.tmpdir, "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+            '</modelVersion><profiles><profile><id>e2e</id></profile></profiles>'
+            '</project>\n')
         self.write_reports(kind="failsafe", name="TEST-ProbeIT.xml")
         return self.tiers_on_the_wire(self.drive(self.mvn_argv("e2e")))
 

@@ -365,6 +365,24 @@ function writeEnvFile(dir: string, projectKey: string): void {
   writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
 }
 
+/** A minimal `pom.xml` in `dir` declaring one profile whose id is `tier`:
+ * the declaration that makes a maven tier verb run `-P<tier>`. */
+function writePomDeclaringTierProfile(dir: string, tier: string): void {
+  writeFileSync(
+    join(dir, "pom.xml"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<project xmlns="http://maven.apache.org/POM/4.0.0">\n` +
+      `  <modelVersion>4.0.0</modelVersion>\n` +
+      `  <groupId>com.acme</groupId>\n` +
+      `  <artifactId>tier-fixture</artifactId>\n` +
+      `  <version>0.0.0</version>\n` +
+      `  <profiles>\n` +
+      `    <profile><id>${tier}</id></profile>\n` +
+      `  </profiles>\n` +
+      `</project>\n`,
+  );
+}
+
 /** Minimal JUnit XML (`<testsuite><testcase>...`) — the shared format both
  * nextest (rust) and surefire/failsafe (maven) emit and Crucible's junit
  * codec parses identically (src/codecs/junit.ts). CR-CRU-050 §S1/§S1b —
@@ -1479,6 +1497,10 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     Bun.spawnSync({ cmd: ["mkdir", "-p", dirB] });
     writeJunitXml(join(dirA, "TEST-ModuleA.xml"), "ModuleA", [{ name: "a1" }]);
     writeJunitXml(join(dirB, "TEST-ModuleB.xml"), "ModuleB", [{ name: "b1" }]);
+    // A declared `module` profile runs the whole reactor (`clean test
+    // -Pmodule`), so both module report dirs are read; `module` with neither
+    // a profile nor `--module` is refused.
+    writePomDeclaringTierProfile(dir, "module");
     await ensureRegistered(MVN_SCRIPT_PATH, "mvn-module-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
@@ -1509,6 +1531,9 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     Bun.spawnSync({ cmd: ["mkdir", "-p", failsafeDir] });
     writeJunitXml(join(surefireDir, "TEST-Unit.xml"), "Unit", [{ name: "u1" }]);
     writeJunitXml(join(failsafeDir, "TEST-Foo.xml"), "FooIT", [{ name: "it1", fail: true }]);
+    // `e2e` is declared-only: the `e2e` profile makes it run `clean verify
+    // -Pe2e`, filing every surefire and failsafe report the run wrote.
+    writePomDeclaringTierProfile(dir, "e2e");
     await ensureRegistered(MVN_SCRIPT_PATH, "mvn-e2e-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 

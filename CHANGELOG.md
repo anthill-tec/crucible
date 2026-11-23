@@ -31,6 +31,18 @@ Releases before 0.3.0 are described only on GitHub Releases.
   **`e2e` is now declared-only and loses `--profile`:** it runs only with `[profile.e2e]` declared, answers
   `tier-run-undeclared` otherwise, and `e2e --profile <p>` is now an argparse error (exit 2). The RUNBOOK has a
   new "Rust tier verbs" section.
+- **A maven tier verb runs the tests its plugin names.** The maven client's `integration` now runs
+  `mvn clean verify -Dtest='!*' -Dsurefire.failIfNoSpecifiedTests=false` and files only failsafe's reports,
+  instead of `clean integration-test` filing surefire's too; a `--system-prop` setting `test` on it is refused.
+  A `pom.xml` profile whose id is the tier now takes the verb over (`clean test -P<tier>` for `unit` and
+  `module`, `clean verify -P<tier>` for the rest) and files every report its run wrote. **`e2e` is now
+  declared-only, and `module` needs `--module` or a declared profile:** otherwise each answers
+  `tier-run-undeclared`. `e2e --failsafe-only` files only the reports its run wrote. A `--profile` on a declared
+  tier, or naming an id no project `pom.xml` and no `~/.m2/settings.xml` declares, is refused before Maven runs
+  (`?id`, `!id`, `-id` and `+id` pass through). A selection that ran no test is refused with `tier-selection-empty`: the run
+  is aborted, and no compile record is filed. A tier run with no `--agent` now sends Maven's console to
+  stderr, so stdout carries only an envelope. The gate's row for a declared profile says the profile was not
+  activated. The RUNBOOK has a new "Maven tier verbs" section.
 - **The source package carries only what builds the wheel.** The `crucible-axi` sdist now holds the
   `crucible_axi` package and the client fleet, plus the project metadata (`pyproject.toml`, the
   README, the licence and this changelog), instead of the whole repository. The wheel built from it

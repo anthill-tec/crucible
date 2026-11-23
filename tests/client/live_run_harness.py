@@ -1197,8 +1197,12 @@ args = sys.argv[1:]
 if "test-compile" in args:
     sys.stdout.write("[ERROR] Foo.java:[1,1] cannot find symbol\\n")
     sys.exit(1)
-dirs = [a.split("=", 1)[1] for a in args
-        if a.startswith("-Dsurefire.reportsDirectory=")]
+# Every reports directory the client named, surefire's or failsafe's, once.
+dirs = []
+for a in args:
+    if a.startswith(("-Dsurefire.reportsDirectory=", "-Dfailsafe.reportsDirectory=")):
+        if a.split("=", 1)[1] not in dirs:
+            dirs.append(a.split("=", 1)[1])
 dirs = dirs or [os.path.join("target", "surefire-reports")]
 if zero_report:
     if not no_report:

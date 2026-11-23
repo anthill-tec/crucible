@@ -1029,11 +1029,17 @@ class MvnEarnedTierTest(_MvnCase):
         self.assertStatedTier(drive, RUNS, "unit", "mvn unit -> POST /runs")
 
     def test_mvn_module_verb_still_ingests_as_module(self):
-        self.write_reports()
-        drive = self.drive(self.mvn_argv("module"))
+        # `module` runs only with a `--module` (or a declared profile).
+        self.write_reports(module="probe")
+        drive = self.drive(self.mvn_argv("module", ["--module", "probe"]))
         self.assertStatedTier(drive, RUNS, "module", "mvn module -> POST /runs")
 
     def test_mvn_e2e_verb_still_ingests_as_e2e(self):
+        # `e2e` runs only a declared profile.
+        Path(self.tmpdir, "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+            '</modelVersion><profiles><profile><id>e2e</id></profile></profiles>'
+            '</project>\n')
         self.write_reports(kind="failsafe", name="TEST-ProbeIT.xml")
         drive = self.drive(self.mvn_argv("e2e"))
         self.assertStatedTier(drive, RUNS, "e2e", "mvn e2e -> POST /runs")

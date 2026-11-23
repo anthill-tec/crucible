@@ -2349,6 +2349,10 @@ def emit_cycle_selection_hard_stop(verb, refusal, context=None):
 
 TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 
+#: The code of a tier run whose selection holds no test: refused, and nothing
+#: filed. One code for every client that checks its selection.
+TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
+
 
 def tier_run_undeclared_help(tier, declared, surface):
     """§S1/§S3 — the next moves for a tier with no declared target: declare one
@@ -6631,13 +6635,18 @@ def ingested_tier():
     return ENVELOPE_TIER_COMPILE if _ingested_compile else ENVELOPE_TIER_NONE
 
 
-def tier_verb_help(tier, meaning, wired):
+def tier_verb_help(tier, meaning, wired, declares=None):
     """§S1 — the one line a tier verb prints in its client's help: what the
     tier MEANS (from the mirror, so all five clients teach one vocabulary) and
     what THIS client does with it — the run it performs, or the refusal it
-    answers with while the project has declared no target for it."""
+    answers with while the project has declared no target for it. A declared
+    cell whose surface (`declares`) says what its declaration runs says that
+    instead of the generic refusal."""
     if wired is not None:
         return f"{tier.upper()} tier — {meaning}. {wired.runs}"
+    runs = declared_tier_runs_line(declares, tier) if declares is not None else None
+    if runs:
+        return f"{tier.upper()} tier — {meaning}. {runs}"
     return (f"{tier.upper()} tier — {meaning}. No target for it is declared on "
             f"this stack: the verb refuses (ok:false, exit 1) naming what to "
             f"declare, and never falls back to another target.")
@@ -6684,10 +6693,17 @@ def tier_verb_help(tier, meaning, wired):
 #               `None` says this surface cannot enumerate a project's
 #               declaration at all (python, whose declaration IS the
 #               invocation — CR-CRU-111 ruling 1).
+#   `runs`      optional: what a declared cell runs, with `<target>` filled
+#               from the template, said by that cell's help line in place of
+#               the generic refusal. Unset, the help line is the refusal.
+#   `runnable`  optional: `(args) -> tiers`, the tier verbs this client runs
+#               on this project, named by a declared cell's refusal. Unset,
+#               the refusal names the tiers the client wires.
 DeclaredTierSurface = collections.namedtuple(
     "DeclaredTierSurface",
-    ("target", "names", "read", "run", "add_args", "suites"),
-    defaults=((), None))
+    ("target", "names", "read", "run", "add_args", "suites", "runs",
+     "runnable"),
+    defaults=((), None, None, None))
 
 
 def declared_target_name(surface, tier):
@@ -6701,6 +6717,14 @@ def declared_tier_surface_line(surface, tier):
     `declared_target_name` would find."""
     return surface.names.replace("<target>",
                                  declared_target_name(surface, tier))
+
+
+def declared_tier_runs_line(surface, tier):
+    """What a declared cell runs, as its surface's `runs` says it, with
+    `<target>` filled; None when the surface does not say."""
+    if not surface.runs:
+        return None
+    return surface.runs.replace("<target>", declared_target_name(surface, tier))
 
 
 def declared_tier_run(tier, funcs, surface):
@@ -6724,7 +6748,9 @@ def declared_tier_run(tier, funcs, surface):
         target = declared_target_name(surface, tier)
         found = surface.read(args, target)
         if not found:
-            raise TierRunUndeclared(tier, declared,
+            runnable = (surface.runnable(args) if surface.runnable is not None
+                        else declared)
+            raise TierRunUndeclared(tier, runnable,
                                     declared_tier_surface_line(surface, tier))
         return surface.run(args, tier, found)
 
@@ -6769,7 +6795,7 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
     for tier, meaning in TIER_MEANINGS.items():
         wired = funcs.get(tier)
         tp = sub.add_parser(tier, parents=list(parents),
-                            help=tier_verb_help(tier, meaning, wired))
+                            help=tier_verb_help(tier, meaning, wired, declares))
         for adder in add_args:
             adder(tp)
         # §S6 ruling 4 — a DECLARED cell takes its client's declared-cell flag
@@ -7171,7 +7197,7 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                     crucible_url, warnings=(), named=None, run_suite=None,
-                    whole_framework=None, whole_script=None):
+                    whole_framework=None, whole_script=None, covered_by=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -7210,7 +7236,12 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     them, excluded ones included, is such a suite, the whole-suite run is
     skipped, and the envelope says so. When `whole_script` names the script
     the whole-suite run is, that run is never skipped, only that script's
-    suite is covered by it, and every other own-stack suite is `run_suite`'s."""
+    suite is covered by it, and every other own-stack suite is `run_suite`'s.
+
+    `covered_by`, when given, is `(suite) -> text`: what a rule-3 row's
+    `coveredBy` says, for a stack whose whole-suite run does not run a
+    declared target the way that target declares it. Unset, the row names
+    the whole-suite run (`whole_suite_label`)."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
     scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
@@ -7285,7 +7316,8 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             # Rule 3 — covered by the run that already happened, and SAYING so
             # rather than collecting the same files a second time. The counts
             # are that run's, and they are NOT added to the union again.
-            row["coveredBy"] = whole_suite_label(stack)
+            row["coveredBy"] = (covered_by(suite) if covered_by is not None
+                                else whole_suite_label(stack))
             row.update(whole_counts or {})
             row["outcome"] = whole_outcome
             rows.append(row)
@@ -7505,7 +7537,8 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                     context, crucible_url, whole_suite_alone=None,
-                    run_suite=None, whole_framework=None, whole_script=None):
+                    run_suite=None, whole_framework=None, whole_script=None,
+                    covered_by=None):
     """§S1/§S2 — the GATE's regression step: the one composition all six gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7535,7 +7568,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                            named=scoped_gate_targets(args),
                            run_suite=run_suite,
                            whole_framework=whole_framework,
-                           whole_script=whole_script)
+                           whole_script=whole_script,
+                           covered_by=covered_by)
 
 
 # ── the run and ingest pipeline lives in `_crucible_run.py` ─────────────────
