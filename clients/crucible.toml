@@ -193,9 +193,16 @@ max = 500
 #   default  every test but the docker tier (`default-filter = "not
 #            binary(<docker e2e binary>)"`) - a developer's run
 #   ci       the same selection, the docker-free gate's profile (`test`,
-#            `regression`, `pre-merge-gate`)
+#            `regression`, `pre-merge-gate`, and `unit` and `integration`
+#            when they declare no profile of their own)
 #   e2e      the docker tier alone (`default-filter = "binary(<docker e2e
-#            binary>)"`), run by `docker-e2e-gate` with docker up
+#            binary>)"`), run by `docker-e2e-gate` with docker up, and by
+#            the `e2e` verb, which runs only when it is declared
+#
+# `unit` and `integration` run `[profile.<tier>]` when it is declared. An
+# undeclared tier runs an explicit `--profile` (declared, or nextest's
+# built-in `default`/`default-miri`), else `ci` when it is declared, else
+# `default`, narrowed by the tier's kind filter.
 #
 # A run streams through cargo-nextest 0.9.130 or later.
 #

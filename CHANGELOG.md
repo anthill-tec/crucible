@@ -22,6 +22,15 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Changed
 
+- **A rust tier verb runs the tests its kind names.** The rust client's `unit` now runs the lib, bin and
+  proc-macro tests (`-E "kind(lib) | kind(bin) | kind(proc-macro)"`), and `integration` only the `tests/`
+  targets (`-E "kind(test)"`), instead of `--lib` and `--tests`. A declared `[profile.unit]` or
+  `[profile.integration]` is run instead, and an explicit `--profile` against it is refused. An undeclared tier
+  runs `--profile`, else a declared `ci`, else nextest's `default`; an undeclared `--profile` and an unparseable
+  `.config/nextest.toml` are refused. A selection that lists no test is refused with `tier-selection-empty`.
+  **`e2e` is now declared-only and loses `--profile`:** it runs only with `[profile.e2e]` declared, answers
+  `tier-run-undeclared` otherwise, and `e2e --profile <p>` is now an argparse error (exit 2). The RUNBOOK has a
+  new "Rust tier verbs" section.
 - **The source package carries only what builds the wheel.** The `crucible-axi` sdist now holds the
   `crucible_axi` package and the client fleet, plus the project metadata (`pyproject.toml`, the
   README, the licence and this changelog), instead of the whole repository. The wheel built from it
