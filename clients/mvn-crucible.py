@@ -1361,9 +1361,10 @@ def _refuse_test_property(args):
     return None
 
 
-#: The `--profile` ids maven resolves itself: optional (`?id`) and
-#: deactivated (`!id`) ones are passed through unchecked.
-_UNCHECKED_PROFILE_PREFIXES = ("?", "!")
+#: The `--profile` ids maven resolves itself: optional (`?id`), deactivated
+#: (`!id`, or maven's older `-id`) and activated (`+id`) ones are passed
+#: through unchecked.
+_UNCHECKED_PROFILE_PREFIXES = ("?", "!", "-", "+")
 
 
 def _refuse_profile_flag(args, tier, declared):
@@ -2617,16 +2618,22 @@ def _profile_ids(path):
 
 def _declared_profile_ids(maven_dir):
     """Every profile id a `--profile` may name: one declared in any pom.xml
-    under `maven_dir` (nothing under a `target` directory counts), or in the
-    user's `~/.m2/settings.xml`. A parent POM outside the project is not
-    read."""
+    under `maven_dir` (nothing under a `target`, `node_modules` or hidden
+    directory counts), or in the user's `~/.m2/settings.xml`. A parent POM
+    outside the project is not read."""
     ids = set()
     for root, dirs, files in os.walk(maven_dir):
-        dirs[:] = sorted(d for d in dirs if d != "target")
+        dirs[:] = sorted(d for d in dirs if d not in _UNREAD_POM_DIRS
+                         and not d.startswith("."))
         if "pom.xml" in files:
             ids |= _profile_ids(os.path.join(root, "pom.xml"))
     return ids | _profile_ids(os.path.join(os.path.expanduser("~"), ".m2",
                                            "settings.xml"))
+
+
+#: The directories whose pom.xml files declare no `--profile` id: build
+#: output and vendored packages (hidden directories are skipped as well).
+_UNREAD_POM_DIRS = ("target", "node_modules")
 
 
 def _run_declared_profile(args, tier, profile):

@@ -513,9 +513,10 @@ after the run started.
 
 - On a tier with a declared profile, any `--profile` is refused, naming the declared profile.
 - On an undeclared tier, each id is refused, naming it, unless it is declared in a `pom.xml` under the maven
-  directory (nothing under a `target/` directory counts) or in `~/.m2/settings.xml`.
-- A comma list (`--profile a,b`) is checked id by id. An id written `?id` (optional) or `!id` (deactivated) is passed
-  to Maven unchecked.
+  directory (nothing under a `target/`, `node_modules/` or hidden directory counts) or in `~/.m2/settings.xml`.
+- A comma list (`--profile a,b`) is checked id by id. An id written `?id` (optional), `!id` or `-id` (deactivated),
+  or `+id` (activated) is passed to Maven unchecked. Write a leading `-` as `--profile=-id`, so the flag is not
+  read as another option.
 - A profile declared only in a parent POM outside the project is refused: declare it in the project, or pass
   `?id`.
 

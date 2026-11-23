@@ -39,7 +39,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
   declared-only, and `module` needs `--module` or a declared profile:** otherwise each answers
   `tier-run-undeclared`. `e2e --failsafe-only` files only the reports its run wrote. A `--profile` on a declared
   tier, or naming an id no project `pom.xml` and no `~/.m2/settings.xml` declares, is refused before Maven runs
-  (`?id` and `!id` pass through). A selection that ran no test is refused with `tier-selection-empty`: the run
+  (`?id`, `!id`, `-id` and `+id` pass through). A selection that ran no test is refused with `tier-selection-empty`: the run
   is aborted, and no compile record is filed. A tier run with no `--agent` now sends Maven's console to
   stderr, so stdout carries only an envelope. The gate's row for a declared profile says the profile was not
   activated. The RUNBOOK has a new "Maven tier verbs" section.
