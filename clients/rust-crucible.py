@@ -2386,6 +2386,11 @@ def cmd_pre_merge_gate(args):
     stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
                                      agent_id=args.agent, verb="pre-merge-gate",
                                      default=_workspace_lint_default())
+    if stopped is None:
+        # The declared unit-check stage follows lint, in lint's directory.
+        stopped = _axi().gate_unit_check_stage(
+            args, project_dir, _ops(), agent_id=args.agent,
+            verb="pre-merge-gate")
     if stopped is not None:
         return stopped
 
@@ -3384,6 +3389,7 @@ def main():
     # backlog teaches every user of this client the wrong thing. The gate's
     # clippy step is its lint stage, so its old flag names it too.
     _axi().add_skip_lint_arg(pmg, "--skip-clippy")
+    _axi().add_skip_unit_check_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
