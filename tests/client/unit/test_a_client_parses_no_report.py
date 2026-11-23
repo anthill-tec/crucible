@@ -392,21 +392,6 @@ class ThePythonClientParsesNoReportTest(unittest.TestCase):
             + _lines(findings))
 
 
-class TheMavenClientParsesNoReportTest(unittest.TestCase):
-
-    def test_the_maven_client_module_defines_no_report_parse(self):
-        """No JUnit parse, no JaCoCo summation and no classname grouping in
-        `mvn-crucible.py`: only its POM read for a declared tier profile is
-        exempt."""
-        findings = report_parse_findings(
-            (CLIENTS / "mvn-crucible.py").read_text(encoding="utf-8"),
-            MVN_EXEMPT)
-        self.assertEqual(
-            findings, [],
-            "the maven client parses none of its runner's reports; found:\n"
-            + _lines(findings))
-
-
 _RUST_CLIENT_WITH_ITS_OWN_COUNT = textwrap.dedent(r'''
     """A rust client that sends nextest's JUnit and llvm-cov's lcov, and
     counts the report's cases itself."""

@@ -301,6 +301,10 @@ GO_ZERO_DISCOVERY_VERB = "regression"
 # is refused before a run opens, so the runner finding no test is driven on
 # `regression`, which still opens and files a zero-discovery run.
 RUST_ZERO_DISCOVERY_VERB = "regression"
+# maven's likewise: a `unit` or `integration` run whose reports hold no test
+# case is refused as an empty selection before anything is filed, so the
+# runner finding no test is driven on `regression`, which still files it.
+MVN_ZERO_DISCOVERY_VERB = "regression"
 
 
 # ── fixtures: junit payloads for the three RUN outcomes ────────────────────
@@ -827,9 +831,9 @@ class MvnIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._MvnModalityCase
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
-        where = "mvn unit / zero-discovery"
+        where = f"mvn {MVN_ZERO_DISCOVERY_VERB} / zero-discovery"
         self.write_zero_report()
-        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]),
+        drive = self.drive(self.mvn_argv(MVN_ZERO_DISCOVERY_VERB),
                            response=_EMPTY_RESPONSE)
         self.assertReachedZeroDiscovery(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)

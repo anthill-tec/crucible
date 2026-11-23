@@ -96,10 +96,11 @@ def _make_fake_mvn_run(surefire_content=None, failsafe_content=None):
     Surefire/Failsafe -- writes each report to the `-D*.reportsDirectory=`
     the command names, defaulting to Maven's OWN real default
     (`<cwd>/target/{surefire,failsafe}-reports`) exactly as the real tool does
-    when the property is absent. Returns a `subprocess.CompletedProcess` the
+    when the property is absent. As real surefire does, `-Dtest=!*` runs (and
+    writes) no surefire report. Returns a `subprocess.CompletedProcess` the
     way `_run_logged` itself would."""
     def _fake(cmd, cwd, env, log_path, narrator=None):
-        if surefire_content is not None:
+        if surefire_content is not None and "-Dtest=!*" not in cmd:
             surefire_dir = (_flag_value(cmd, "-Dsurefire.reportsDirectory=")
                             or os.path.join(cwd, "target", "surefire-reports"))
             os.makedirs(surefire_dir, exist_ok=True)
@@ -287,10 +288,10 @@ class AgentDirectoryReadIsolationTest(_BaseMvnIsolationTest):
             f"stderr={err!r}",
         )
         assert ingest_call is not None
+        # `integration` files failsafe's reports only.
         self.assertEqual(
             ingest_call[0][1].get("data"),
-            [_junit_suite("com.acme.FixtureTest", 1, 0, "test_passes"),
-             _junit_suite("com.acme.FixtureIT", 1, 0, "test_passes_it")],
+            [_junit_suite("com.acme.FixtureIT", 1, 0, "test_passes_it")],
             f"the ingest sends ONLY this run's own fresh reports, written "
             f"under the agent's own directory -- the stale planted failures "
             f"sitting in the shared target/{{surefire,failsafe}}-reports/ "
@@ -351,21 +352,25 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
     def test_reports_a_pinned_pom_wrote_to_target_are_moved_into_the_agents_directory_and_warned(self):
         def pinned_pom_run(cmd, cwd, env, log_path, narrator=None):
             # The POM's own <reportsDirectory> wins: the -D flags are ignored.
-            for kind, name, suite in (
-                    ("surefire", "TEST-Fixture.xml",
-                     _junit_suite("com.acme.FixtureTest", 1, 0, "test_passes")),
-                    ("failsafe", "TEST-FixtureIT.xml",
-                     _junit_suite("com.acme.FixtureIT", 2, 1, "test_it"))):
+            # As real surefire does, `-Dtest=!*` runs (and writes) no surefire
+            # report.
+            written = [("failsafe", "TEST-FixtureIT.xml",
+                        _junit_suite("com.acme.FixtureIT", 2, 1, "test_it"))]
+            if "-Dtest=!*" not in cmd:
+                written.insert(0, ("surefire", "TEST-Fixture.xml",
+                                   _junit_suite("com.acme.FixtureTest", 1, 0,
+                                                "test_passes")))
+            for kind, name, suite in written:
                 directory = os.path.join(cwd, "target", f"{kind}-reports")
                 os.makedirs(directory, exist_ok=True)
                 with open(os.path.join(directory, name), "w") as f:
                     f.write(suite)
             return subprocess.CompletedProcess(cmd, 0, stdout="")
 
-        # The board decodes the moved reports: two passed, one failed.
+        # The board decodes the moved report: one passed, one failed.
         post_patch, get_patch = self._mocked_transport(
-            {"ok": True, "run": {"passed": 2, "failed": 1, "pending": 0,
-                                 "total": 3, "files": 2}})
+            {"ok": True, "run": {"passed": 1, "failed": 1, "pending": 0,
+                                 "total": 2, "files": 1}})
         with mock.patch.object(self.module, "_run_logged", side_effect=pinned_pom_run), \
              post_patch as post_mock, get_patch:
             code, out, err = _run_main(self.module, [
@@ -375,9 +380,11 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-pinned")
         moved = sorted(os.path.basename(p) for p in
                        glob.glob(os.path.join(own_dir, "TEST-*.xml")))
+        # `integration` files failsafe's reports only, so failsafe's is the
+        # one report its run wrote.
         self.assertEqual(
-            moved, ["TEST-Fixture.xml", "TEST-FixtureIT.xml"],
-            f"both reports the pinned POM wrote to target/ must be MOVED into "
+            moved, ["TEST-FixtureIT.xml"],
+            f"the report the pinned POM wrote to target/ must be MOVED into "
             f"{own_dir}; found {moved!r}; stderr={err!r}")
         for kind in ("surefire", "failsafe"):
             left = glob.glob(os.path.join(self.tmpdir, "target", f"{kind}-reports",
@@ -391,9 +398,8 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
         assert ingest_call is not None
         self.assertEqual(
             ingest_call[0][1].get("data"),
-            [_junit_suite("com.acme.FixtureTest", 1, 0, "test_passes"),
-             _junit_suite("com.acme.FixtureIT", 2, 1, "test_it")],
-            f"the ingest must send the moved reports; got "
+            [_junit_suite("com.acme.FixtureIT", 2, 1, "test_it")],
+            f"the ingest must send the moved report; got "
             f"payload={ingest_call[0][1]!r}")
         self.assertEqual(code, 1, "the board's one failure makes the run red")
 
@@ -403,7 +409,7 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
         overridden = [w for w in warnings
                       if "reportsdirectory" in str(w.get("detail", "")).lower()]
         self.assertEqual(
-            len(overridden), 2,
+            len(overridden), 1,
             f"one warning per plugin whose location the POM overrode, each "
             f"naming reportsDirectory; got warnings={warnings!r}")
 
@@ -423,8 +429,10 @@ class ModuleRegressionAndTestVerbsUseTheAgentsOwnDirectoryTest(_BaseMvnIsolation
         with mock.patch.object(self.module, "_run_logged",
                                 side_effect=fake_run) as run_logged_mock, \
              post_patch, get_patch:
+            # `module` runs only with a `--module` (or a declared profile).
             code, out, err = _run_main(self.module, [
                 "module", "--project-dir", self.tmpdir, "--agent", "agent-module",
+                "--module", "probe",
             ])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
 
@@ -521,6 +529,11 @@ class ModuleTierMultiModuleReactorSendsEveryReportInlineTest(_BaseMvnIsolationTe
                 f.write(_junit_suite("com.acme.moduleA.ModuleATest", 1, 0, "a"))
             return subprocess.CompletedProcess(cmd, 0, stdout="")
 
+        # A reactor-wide `module` run is a declared `module` profile's.
+        with open(os.path.join(self.tmpdir, "pom.xml"), "w") as f:
+            f.write('<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>'
+                    '4.0.0</modelVersion><profiles><profile><id>module</id></profile>'
+                    '</profiles></project>\n')
         post_patch, get_patch = self._mocked_transport()
         with mock.patch.object(self.module, "_run_logged",
                                 side_effect=two_module_reactor_run), \

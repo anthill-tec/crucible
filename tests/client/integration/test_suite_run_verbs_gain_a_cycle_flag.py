@@ -146,6 +146,21 @@ def _mvn_bdd_setup(project_dir, bin_dir):
     return (["--project-dir", project_dir, "--reports", "reports"],
            {"FAKE_TOTAL": "1"})
 
+# `module` (with no `--module`) and `e2e` run only a declared profile.
+def _mvn_module_setup(project_dir, bin_dir):
+    write_fake_mvnw(project_dir)
+    (Path(project_dir) / "pom.xml").write_text(
+        _POM_WITH_TIER_PROFILE.replace("__PROFILE__", "module"))
+    return (["--project-dir", project_dir, "--reports", "reports"],
+           {"FAKE_TOTAL": "1"})
+
+def _mvn_e2e_setup(project_dir, bin_dir):
+    write_fake_mvnw(project_dir)
+    (Path(project_dir) / "pom.xml").write_text(
+        _POM_WITH_TIER_PROFILE.replace("__PROFILE__", "e2e"))
+    return (["--project-dir", project_dir, "--reports", "reports"],
+           {"FAKE_TOTAL": "1"})
+
 def _rust_test_setup(project_dir, bin_dir):
     write_fake_cargo(bin_dir)
     return (["--crate", "fake-crate", "--project-dir", project_dir, "--reports", "reports"],
@@ -190,9 +205,9 @@ TARGET_VERBS = (
     ("python-crucible.py", "test", _python_test_setup),
     ("mvn-crucible.py", "test", _mvn_tier_setup),
     ("mvn-crucible.py", "unit", _mvn_tier_setup),
-    ("mvn-crucible.py", "module", _mvn_tier_setup),
+    ("mvn-crucible.py", "module", _mvn_module_setup),
     ("mvn-crucible.py", "integration", _mvn_tier_setup),
-    ("mvn-crucible.py", "e2e", _mvn_tier_setup),
+    ("mvn-crucible.py", "e2e", _mvn_e2e_setup),
     ("mvn-crucible.py", "bdd", _mvn_bdd_setup),
     ("rust-crucible.py", "test", _rust_test_setup),
     ("rust-crucible.py", "smoke-test", _rust_smoke_test_setup),

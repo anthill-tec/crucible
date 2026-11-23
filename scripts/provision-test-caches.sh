@@ -13,13 +13,22 @@
 #                          JUnit artifact the run needs is fetched. Maven's
 #                          HOME is an empty temp dir: no operator settings.
 #
+#                          The same repository is filled for the failsafe
+#                          fixture (tests/fixtures/failsafe-live-project),
+#                          whose real lifecycle runs through `verify`, so
+#                          failsafe and the jar plugin are fetched too. The
+#                          maven tier module (tests/client/integration/test_a_
+#                          maven_tier_verb_runs_the_tests_its_plugin_names.py)
+#                          runs it offline.
+#
 # The maven repository carries `provision.stamp`:
 #
 #   pom-sha256=<sha256 of tests/fixtures/surefire-live-project/pom.xml>
 #   maven=<the version `mvn --version` reports, e.g. 3.9.9>
 #
-# the exact lines the live module's `maven_repo_gap` checks. A stamp matching
-# this pom.xml and this maven skips the fill.
+# the exact lines the live module's `maven_repo_gap` checks, and
+# `failsafe-provision.stamp`, the same two lines for the failsafe fixture's
+# pom.xml. A stamp matching its pom.xml and this maven skips that fill.
 #
 # The go fixtures (tests/fixtures/go-client) require no module, so the go
 # caches (.cache/test-suite/go-build, go-mod) need no download: go fills them
@@ -31,6 +40,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REPO="$ROOT/.cache/test-suite/m2"
 STAMP="$REPO/provision.stamp"
 FIXTURE="$ROOT/tests/fixtures/surefire-live-project"
+FAILSAFE_STAMP="$REPO/failsafe-provision.stamp"
+FAILSAFE_FIXTURE="$ROOT/tests/fixtures/failsafe-live-project"
 
 if ! command -v mvn >/dev/null 2>&1; then
     echo "provision-test-caches: maven (mvn) is not on PATH" >&2
@@ -42,7 +53,6 @@ trap 'rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM
 mkdir "$WORK/home"
 
-POM_SHA=$(sha256sum "$FIXTURE/pom.xml" | cut -d ' ' -f 1)
 # The JDK the fill compiles with, then maven's own report (it names the JDK
 # it runs on): the fixture compiles with `release 21`, so the log says which
 # JDK a run had before any build starts.
@@ -59,17 +69,27 @@ if [ -z "$VERSION" ]; then
     echo "provision-test-caches: could not read maven's version off mvn --version" >&2
     exit 1
 fi
+
+# fill <fixture> <stamp> <phase after test, or empty>: fill the suite
+# repository from the fixture's real lifecycle, `clean test` and then the
+# phase given, and write its stamp. A matching stamp skips the fill.
+fill() {
+fixture=$1
+stamp=$2
+through=$3
+POM_SHA=$(sha256sum "$fixture/pom.xml" | cut -d ' ' -f 1)
 EXPECTED=$(printf 'pom-sha256=%s\nmaven=%s' "$POM_SHA" "$VERSION")
 
-if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$EXPECTED" ]; then
-    echo "provision-test-caches: $REPO is provisioned for this pom.xml and maven $VERSION; skipped"
-    exit 0
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$EXPECTED" ]; then
+    echo "provision-test-caches: $REPO is provisioned for $fixture/pom.xml and maven $VERSION; skipped"
+    return 0
 fi
 
-echo "provision-test-caches: filling $REPO (maven $VERSION, online)"
+echo "provision-test-caches: filling $REPO for $fixture (maven $VERSION, online)"
 mkdir -p "$REPO"
-rm -f "$STAMP"
-cp -R "$FIXTURE" "$WORK/project"
+rm -f "$stamp"
+rm -rf "$WORK/project"
+cp -R "$fixture" "$WORK/project"
 rm -rf "$WORK/project/target"
 # The committed maven.config holds `-o`; the provisioning run is online.
 : > "$WORK/project/.mvn/maven.config"
@@ -101,7 +121,7 @@ while :; do
         cd "$WORK/project"
         rc=0
         HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" \
-            mvn -B clean test $update -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true \
+            mvn -B clean test $through $update -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true \
                 -Daether.connector.http.retryHandler.count=3 \
                 -Daether.transport.http.retryHandler.count=3 || rc=$?
         echo "$rc" > "$WORK/fill.status"
@@ -125,5 +145,9 @@ while :; do
     update="-U"
     sleep 10
 done
-printf '%s\n' "$EXPECTED" > "$STAMP"
-echo "provision-test-caches: wrote $STAMP"
+printf '%s\n' "$EXPECTED" > "$stamp"
+echo "provision-test-caches: wrote $stamp"
+}
+
+fill "$FIXTURE" "$STAMP" ""
+fill "$FAILSAFE_FIXTURE" "$FAILSAFE_STAMP" verify

@@ -277,8 +277,9 @@ AGENT = "CR-CRU-111-C3-modality-probe"
 # makes" and "tiers it covers", per client. Every count in this file is DERIVED
 # from this mapping; nothing below repeats a number.
 #
-#   mvn      surefire (`*Test`) · surefire scoped to a reactor module
-#            (`-pl <m> -am`) · failsafe / `integration-test`
+#   mvn      surefire (`*Test`) · failsafe (`clean verify`, surefire
+#            selecting nothing); `module` runs only with `--module` or a
+#            declared profile, and `e2e` only declared (`-Pe2e`)
 #   rust     nextest kind filters — `kind(lib) | kind(bin) | kind(proc-macro)`
 #            · `kind(test)`; `e2e` is declared (`[profile.e2e]`)
 #   arduino  the native host `g++`/`make` build
@@ -286,7 +287,7 @@ AGENT = "CR-CRU-111-C3-modality-probe"
 # arduino's "(+ `integration` where the native build separates it)" is NOT
 # here — see ESCALATION 6.
 TOOLCHAIN_SPLIT_CELLS = {
-    "mvn": ("unit", "module", "integration", "e2e"),
+    "mvn": ("unit", "integration"),
     "rust": ("unit", "integration"),
     "arduino": ("unit",),
 }
@@ -961,6 +962,11 @@ class MvnSplitCellsTest(_MvnModalityCase):
         phase failsafe binds to), ingesting the failsafe reports under
         `e2e`."""
         cell = "mvn/e2e"
+        # `e2e` runs only a declared profile.
+        Path(self.tmpdir, "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+            '</modelVersion><profiles><profile><id>e2e</id></profile></profiles>'
+            '</project>\n')
         self.write_reports(kind="failsafe", name="TEST-ProbeIT.xml")
         drive = self.drive(self.mvn_argv("e2e"))
         runs = self.assertToolchainRan(drive, "fake-mvnw", cell)

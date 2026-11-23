@@ -398,9 +398,21 @@ class MvnEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase)
     `_emit_ingest_summary_axi` but is stdout-polluted (§S3, its own test
     below)."""
 
-    def _drive(self, verb_name, extra_argv=None):
+    def _drive(self, verb_name, extra_argv=None, project_dir_factory=None):
         return _drive_with_bin_dir("mvn", verb_name, _build_fake_bin_dir,
+                                   project_dir_factory=project_dir_factory,
                                    extra_argv=extra_argv)
+
+    @staticmethod
+    def _project_declaring_e2e():
+        """The mvn fixture with a pom.xml declaring an `e2e` profile: `e2e`
+        runs only a declared profile."""
+        project_dir = _make_project_dir("mvn")
+        (project_dir / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0'
+            '</modelVersion><profiles><profile><id>e2e</id></profile></profiles>'
+            '</project>\n')
+        return project_dir
 
     def test_compile_emits_envelope_without_raw_build_output_on_stdout(self):
         """§S3 -- the STRONGEST purity violation in scope: `cmd_compile`
@@ -427,12 +439,14 @@ class MvnEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase)
         self.assertEqual(axi.get("action"), "down")
 
     def test_e2e_emits_envelope_with_run_block(self):
-        emits, axi, result = self._drive("e2e")
+        emits, axi, result = self._drive(
+            "e2e", project_dir_factory=self._project_declaring_e2e)
         self._assert_full_envelope("mvn", "e2e", emits, axi, result,
                                    required_fields=("run",))
 
     def test_module_emits_envelope_with_run_block(self):
-        emits, axi, result = self._drive("module")
+        # `module` runs only with a `--module` (or a declared profile).
+        emits, axi, result = self._drive("module", extra_argv=["--module", "probe"])
         self._assert_full_envelope("mvn", "module", emits, axi, result,
                                    required_fields=("run",))
 

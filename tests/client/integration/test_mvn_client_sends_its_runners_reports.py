@@ -93,6 +93,7 @@ def _texts(plugins, modules=MODULES, variant="pass", failing_module=None):
 
 
 SUREFIRE_TEXTS = _texts(("surefire",))
+FAILSAFE_TEXTS = _texts(("failsafe",))
 BOTH_TEXTS = _texts(PLUGINS)
 JACOCO_TEXTS = [JACOCO[m] for m in MODULES]
 
@@ -157,6 +158,8 @@ class EveryMavenReportVerbSendsOneRunsIngestTest(_MavenProject, unittest.TestCas
         self.assertEqual(body.get("tier"), "unit", f"body={body!r}")
 
     def test_module_over_a_two_module_reactor_sends_every_report_text_sorted(self):
+        # `module` with no `--module` runs only a declared profile.
+        self.declare_tier_profile("module")
         self.board.script_run(passed=2, total=2, files=2)
         result = self.drive("module", "mvn-sends-module")
         body = self.assert_reports_inline_with_raw_and_exit(result, SUREFIRE_TEXTS)
@@ -168,17 +171,22 @@ class EveryMavenReportVerbSendsOneRunsIngestTest(_MavenProject, unittest.TestCas
         self.declare_tier_profile("bdd")
         self.board.script_run(passed=2, total=2, files=2)
         result = self.drive("bdd", "mvn-sends-bdd")
-        body = self.assert_reports_inline_with_raw_and_exit(result, SUREFIRE_TEXTS)
+        # A declared bdd profile runs `clean verify -Pbdd` and sends every
+        # report its run wrote.
+        body = self.assert_reports_inline_with_raw_and_exit(result, BOTH_TEXTS)
         self.assertEqual(body.get("tier"), "bdd", f"body={body!r}")
 
-    def test_integration_and_e2e_send_surefire_and_failsafe_texts_under_their_tier(self):
+    def test_integration_sends_failsafe_and_a_declared_e2e_both_texts_under_their_tier(self):
+        # `integration` sends failsafe's reports only; `e2e` runs only a
+        # declared profile, which sends every report its run wrote.
+        self.declare_tier_profile("e2e")
         self.board.script_run(passed=4, total=4, files=4)
-        for verb in ("integration", "e2e"):
+        for verb, texts in (("integration", FAILSAFE_TEXTS), ("e2e", BOTH_TEXTS)):
             with self.subTest(verb=verb):
                 before = len(self.board.events)
                 result = self.drive(verb, f"mvn-sends-{verb}")
                 del self.board.events[:before]
-                body = self.assert_reports_inline_with_raw_and_exit(result, BOTH_TEXTS)
+                body = self.assert_reports_inline_with_raw_and_exit(result, texts)
                 self.assertEqual(body.get("tier"), verb, f"body={body!r}")
 
     def test_regression_sends_surefire_and_failsafe_texts_and_no_coverage(self):

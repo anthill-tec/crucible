@@ -98,7 +98,8 @@ _FAKE_KEYS = ("FAKE_EXIT", "FAKE_FAIL", "FAKE_ZERO", "FAKE_REPORT",
 # its surefire report, and its failsafe report when the goals reach failsafe
 # (`integration-test`, `verify`), into the directory the client named for the
 # plugin (`-D<plugin>.reportsDirectory=`), else `<module>/target/<plugin>-
-# reports`. alpha's surefire case fails under FAKE_FAIL=1; every report holds
+# reports`. As real surefire does, `-Dtest=!*` runs (and writes) no surefire
+# report. alpha's surefire case fails under FAKE_FAIL=1; every report holds
 # no case under FAKE_ZERO=1; none is written under FAKE_REPORT=none. Each
 # module's JaCoCo CSV goes to `<module>/target/jacoco-report/jacoco.csv`
 # unless FAKE_NO_JACOCO=1. It exits FAKE_EXIT (default 1 under FAKE_FAIL=1,
@@ -133,7 +134,7 @@ for arg in args:
         flag = "-D%s.reportsDirectory=" % plugin
         if arg.startswith(flag):
             dirs[plugin] = arg[len(flag):]
-plugins = ["surefire"]
+plugins = [] if "-Dtest=!*" in args else ["surefire"]
 if any(goal in args for goal in ("integration-test", "verify",
                                   "failsafe:integration-test")):
     plugins.append("failsafe")
