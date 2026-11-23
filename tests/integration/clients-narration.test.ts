@@ -386,6 +386,21 @@ function writeMvnNarrationFixture(dir: string, key: string): void {
   writeJunitXmlClass(join(reportsDir, "TEST-com.acme.AlphaTest.xml"), "com.acme.AlphaTest", 2);
   writeJunitXmlClass(join(reportsDir, "TEST-com.acme.BravoTest.xml"), "com.acme.BravoTest", 2);
   writeJunitXmlClass(join(reportsDir, "TEST-com.acme.CharlieTest.xml"), "com.acme.CharlieTest", 2);
+  // The fixture runs the `module` verb, which needs `--module` or a declared
+  // `module` profile; the profile keeps the reports at the root `target`.
+  writeFileSync(
+    join(dir, "pom.xml"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<project xmlns="http://maven.apache.org/POM/4.0.0">\n` +
+      `  <modelVersion>4.0.0</modelVersion>\n` +
+      `  <groupId>com.acme</groupId>\n` +
+      `  <artifactId>narration-fixture</artifactId>\n` +
+      `  <version>0.0.0</version>\n` +
+      `  <profiles>\n` +
+      `    <profile><id>module</id></profile>\n` +
+      `  </profiles>\n` +
+      `</project>\n`,
+  );
 }
 
 // ── tests ───────────────────────────────────────────────────────────────────
