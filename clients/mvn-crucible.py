@@ -1139,7 +1139,8 @@ def _refuse_empty_selection(label, kinds, args, project_dir, run_id, warnings):
     """An empty selection's answer: the run this verb opened (if any) aborted,
     and ONE `ok: false` envelope carrying `tier-selection-empty`. Nothing is
     filed and maven is not run again. Returns the exit, 1."""
-    refusal = _empty_selection_refusal(label, kinds, getattr(args, "test", None))
+    refusal = _empty_selection_refusal(label, kinds, getattr(args, "test", None),
+                                       _read_declared_profile(args, label))
     closing = []
     if run_id:
         closing = [_axi().abort_run(_post, _project_key(project_dir), args.agent,
@@ -1149,18 +1150,19 @@ def _refuse_empty_selection(label, kinds, args, project_dir, run_id, warnings):
                             warnings=list(warnings) + closing)
 
 
-def _empty_selection_refusal(label, kinds, test_pattern):
-    """(PURE) What a selection that ran no test says."""
+def _empty_selection_refusal(label, kinds, test_pattern, declared=None):
+    """(PURE) What a selection that ran no test says. Declaring the tier's
+    profile is advised only when the tier has no `declared` profile."""
+    declare = "" if declared else f", or declare a `{label}` profile in pom.xml"
     if kinds == _FAILSAFE:
         return (f"`{label}` runs failsafe's integration tests and this run's "
                 f"failsafe reports hold no test: the project binds no "
                 f"failsafe, or failsafe found no test to run; nothing was "
-                f"filed — bind maven-failsafe-plugin and add an `*IT` test, or "
-                f"declare a `{label}` profile in pom.xml")
+                f"filed — bind maven-failsafe-plugin and add an `*IT` "
+                f"test{declare}")
     narrowed = f" `-Dtest={test_pattern}`" if test_pattern else ""
     return (f"the `{label}` run's selection{narrowed} ran no test; nothing "
-            f"was filed — widen the selection, or declare a `{label}` profile "
-            f"in pom.xml")
+            f"was filed — widen the selection{declare}")
 
 
 def _refuse_tier_run(verb, project_dir, agent, refusal, code=None, warnings=()):
