@@ -56,6 +56,7 @@ from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import write_go_module
 from tests.client.integration.test_each_gate_runs_lint_in_its_own_order import (
+    CHECK_COMPILED_NOTHING,
     GATE,
     LINTER,
     MARKER,
@@ -495,6 +496,17 @@ class PythonGateRunsItsDeclaredUnitCheckTest(_SharedParsingCases,
         return (call["tool"] == "python" and call["argv"][:1] != ["-c"]
                 and not self.is_check(call)
                 and call["argv"][:3] != ["-m", "coverage", "lcov"])
+
+    def test_checks_warning_rides_the_envelope_of_a_unit_check_abort(self):
+        # No `app` or `tests` here: `check` compiles nothing and says so.
+        path = self.failing_unit_check()
+        root = self.project(lint_table([LINTER, "check", "."], format=MARKER)
+                            + unit_check_table([str(path), *UNIT_CHECK_ARGS]))
+        result, axi = self.drive_gate(root)
+        why = self.why(result, axi)
+        self.assertStoppedAtUnitCheck(result, axi, why)
+        self.assertEqual(warning_codes(axi).count(CHECK_COMPILED_NOTHING), 1,
+                         f"check's warning survives the unit-check abort; {why}")
 
 
 # ── bun ─────────────────────────────────────────────────────────────────────
