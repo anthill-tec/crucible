@@ -2505,14 +2505,33 @@ def _add_workflow_agent_arg(p, extra=""):
     )
 
 
-def _add_mvn_flags(p):
+def _add_mvn_flags(p, profile_help="Maven profile -P<P> (repeatable)"):
     p.add_argument("--module", help="Reactor module to scope to (mvn -pl <module>)")
     p.add_argument("--also-make", action="store_true", help="Add -am (build required upstream modules)")
     p.add_argument("--update-snapshots", action="store_true", help="Add -U (force snapshot update)")
     p.add_argument("--native", action="store_true", help="Add -Dnative (GraalVM native build path)")
-    p.add_argument("--profile", action="append", help="Maven profile -P<P> (repeatable)")
+    p.add_argument("--profile", action="append", help=profile_help)
     p.add_argument("--system-prop", action="append", metavar="K=V",
                    help="System property -DK=V (repeatable), e.g. api.version=1.4.2")
+
+
+#: What `--profile` says on a tier verb, where it is checked before maven runs.
+_TIER_PROFILE_HELP = (
+    "Maven profile -P<P> (repeatable; a comma list is checked id by id). "
+    "It is refused before maven runs on a tier with a declared profile, "
+    "and for an id that no pom.xml under the maven dir and no "
+    "~/.m2/settings.xml declares; ?id, !id, -id and +id pass through "
+    "unchecked.")
+
+
+def _add_tier_mvn_flags(p):
+    """Maven's own flags on a test tier verb, its `--profile` help naming
+    when the flag is refused."""
+    _add_mvn_flags(p, profile_help=_TIER_PROFILE_HELP)
+
+
+#: The test tier verbs whose own help says what they run.
+_TEST_TIER_VERBS = ("unit", "module", "integration", "e2e")
 
 
 def _add_log_arg(p):
@@ -2580,7 +2599,7 @@ def _add_declared_tier_args(p):
                                     "(compile-fail → /api/v2/runs/compile)")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
-    _add_mvn_flags(p)
+    _add_tier_mvn_flags(p)
     _add_log_arg(p)
 
 
@@ -2786,16 +2805,14 @@ def main():
     # live in ONE place (the shared module's mirror) and a client dict keyed
     # by tier NAMES would be the second copy that is forbidden.
     tier_verb = _axi().TierVerb
-    _axi().add_tier_verbs(
-        sub,
-        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
-        dict(unit=tier_verb(  # noqa: C408
+    # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
+    wired = dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `mvn clean test` (with `-Dtest=<pattern>` only under "
                  "--test) and ingests surefire; a declared `unit` profile "
                  "runs `mvn clean test -Punit` instead.",
                  (_add_unit_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
-                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
+                  _add_tier_mvn_flags, _add_log_arg, _add_reports_arg)),
              module=tier_verb(
                  cmd_module,
                  "Runs `mvn clean test -pl <module> [-am]` — maven's own "
@@ -2803,7 +2820,7 @@ def main():
                  "`module` profile runs `mvn clean test -Pmodule` instead. "
                  "With neither --module nor the profile it refuses.",
                  (_add_module_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
-                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
+                  _add_tier_mvn_flags, _add_log_arg, _add_reports_arg)),
              integration=tier_verb(
                  cmd_integration,
                  "Runs `mvn clean verify -Dtest='!*' "
@@ -2812,7 +2829,7 @@ def main():
                  "`integration` profile runs `mvn clean verify -Pintegration` "
                  "instead.",
                  (_add_integration_tier_args, _add_gate_cycle_arg,
-                  _add_run_release_arg, _add_mvn_flags, _add_log_arg,
+                  _add_run_release_arg, _add_tier_mvn_flags, _add_log_arg,
                   _add_reports_arg)),
              e2e=tier_verb(
                  cmd_e2e,
@@ -2820,17 +2837,20 @@ def main():
                  "(failsafe IT / @QuarkusIntegrationTest), and refuses with "
                  "none. No coverage.",
                  (_add_e2e_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
-                  _add_mvn_flags, _add_log_arg, _add_reports_arg)),
+                  _add_tier_mvn_flags, _add_log_arg, _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full reactor `mvn clean verify`, reports sent; "
                  "coverage-free unless --coverage adds JaCoCo.",
                  (_add_regression_tier_args, _add_mvn_flags, _add_log_arg,
-                  _add_reports_arg))),
-        declares=_TIER_DECLARATION_SURFACE,
-        add_args=(_add_project_args,))
-    # `bdd` is maven's one declared-only cell with no verb of its own: its
-    # help says what its declaration runs.
+                  _add_reports_arg)))
+    _axi().add_tier_verbs(sub, wired, declares=_TIER_DECLARATION_SURFACE,
+                          add_args=(_add_project_args,))
+    # Each test tier verb's own help says what it runs, as its line in the
+    # root listing does; `bdd`, maven's one declared-only cell, says what its
+    # declaration runs.
+    for tier in _TEST_TIER_VERBS:
+        sub.choices[tier].description = wired[tier].runs
     sub.choices["bdd"].description = _axi().declared_tier_runs_line(
         _TIER_DECLARATION_SURFACE, "bdd")
 
