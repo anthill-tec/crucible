@@ -5,6 +5,7 @@
 - Filed 2026-11-21 from todo #27.
 - Revised 2026-11-23 after the gap analysis and the user's rulings M1–M11, recorded in
   `test-reports/work/cr268-gap-analysis.md`.
+- The user ruled that `settings.xml` profiles are accepted, and approved the spec on 2026-11-23.
 
 | Field | Value |
 |---|---|
@@ -84,9 +85,12 @@ files surefire's reports.
 
 - On a tier with a declared profile, any `--profile` is refused, as rust's R9 refuses it. The refusal names the
   declared profile.
-- On an undeclared tier, a `--profile` id that no `pom.xml` under the Maven directory declares is refused, naming
-  the id. Nothing under `target/` counts. Ids written as `?id` (optional) or `!id` (deactivate) are passed through
-  unchecked.
+- On an undeclared tier, a `--profile` id is refused, naming the id, when it is declared in neither of these:
+  - any `pom.xml` under the Maven directory (nothing under `target/` counts);
+  - `~/.m2/settings.xml`.
+
+  A profile in a parent POM outside the project is refused; the RUNBOOK says so. A comma list (`-Pa,b`) is checked
+  id by id. Ids written as `?id` (optional) or `!id` (deactivate) are passed through unchecked.
 - `regression` and the gate are not changed.
 
 **S7 — an empty selection is refused (rulings M4 and M7).** Maven has no list step, so the check is made after Maven
@@ -157,7 +161,8 @@ A `--system-prop test=x` on `integration` is refused, with no Maven run.
 - `--profile x` on a tier with a declared profile;
 - an undeclared `--profile` id.
 
-`--profile '?x'` and `--profile '!x'` pass through to Maven.
+An id declared only in a test-owned `~/.m2/settings.xml` (under a temporary `HOME`) is accepted. `--profile '?x'` and
+`--profile '!x'` pass through to Maven.
 
 **AC5 — an empty selection (S7).** These answer `tier-selection-empty` and exit 1, with no compile record and no
 second Maven run:
