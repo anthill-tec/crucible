@@ -171,9 +171,10 @@ directory and writes JUnit reports, and a recording board. Each holds with and w
   - `test_client_tier_declaration_detection.py` keeps working, because its declarations pass `--dir tests/native`.
     Its refusal sentence must still name the `Makefile` and a `make junit-<tier>` example.
   - In `test_client_tier_run_modality.py`, arduino's split cells gain `integration` and `e2e`.
+  - In `test_an_arduino_run_narrowed_by_tests_and_name_reaches_make.py`, `unit`'s zero-case runs, narrowed or not,
+    expect AC5's refusal. `test` keeps today's behaviour, and the module's other tests hold.
 - **Pins that hold as written:**
   - the arduino gate tests;
-  - `test_an_arduino_run_narrowed_by_tests_and_name_reaches_make.py`;
   - the arduino stream-declaration tests.
 
 ## Non-goals
