@@ -1905,6 +1905,9 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     # above asked for each tier: the same Makefile read, without the
     # single-name filter.
     suites=_axi().template_declared_suites,
+    # A `module`/`bdd` refusal names the tier verbs that run on this
+    # project, as the place verbs' refusal does.
+    runnable=_runnable_tiers,
 )
 
 
