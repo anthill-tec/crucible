@@ -961,13 +961,19 @@ describe("CR-CRU-085 AC7 — the lanes and the table's `track` column appear and
 // being `distinctLabels` over THAT WAVE's membership (CR-CRU-085 §S2), and
 // starts being the published project list instead.
 describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep their scopes against the project-level published list", () => {
-  test("a release whose members declare ONE track shows NO column and NO lanes, even though the QUEUE it was read from declares three", async () => {
+  // SUPERSEDED (cycle 1028). This case used to pin that a release declaring
+  // ONE track drew no column and no lanes although its queue declared three.
+  // The queue now decides: three declared tracks make the PROJECT multi-track,
+  // so the single-track wave draws its one lane and the table states its
+  // `track` column. What still holds is a lane's SCOPE — a wave lanes only the
+  // tracks its own members declare, so `track-7`/`track-9` appear nowhere in
+  // zone 2. The solo twin below keeps the old guarantee for a project whose
+  // queue declares one track.
+  test("a release whose members declare ONE track, read from a queue declaring three, lanes its single-track wave and shows the column, and never draws the queue's other two tracks", async () => {
     const queue = queueWithForeignTracks(ONE_TRACK_IN_ONE_WAVE);
 
     // Non-vacuity, stated as data: over the WHOLE read the fixture declares
-    // three lanes; the focused release declares exactly one. Unsorted because
-    // `fixtureTracks` is the FIRST-APPEARANCE-order copy above — not the
-    // server's sorted published list.
+    // three lanes; the focused release declares exactly one.
     expect(fixtureTracks(queue)).toEqual(["track-7", "track-9", "track-1"]);
     expect(fixtureTracks(ONE_TRACK_IN_ONE_WAVE)).toEqual(["track-1"]);
 
@@ -977,23 +983,47 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
     expect(flow().getAttribute("data-version")).toBe("0.4.0");
     expect(waveNames()).toEqual([WAVE, SECOND_WAVE]);
 
-    // The table's column is the RELEASE's answer (one track → no column), not
-    // the project's (three → column).
-    expect(tableHasTrackColumn()).toBe(false);
+    // The project is multi-track, so the table states the column.
+    expect(tableHasTrackColumn()).toBe(true);
 
-    // …and each wave's lanes are that WAVE's answer: neither is laned, and
-    // `track-7`/`track-9` appear nowhere in zone 2's chrome.
-    expect(laneEls(WAVE).length).toBe(expectedLaneCount(ONE_TRACK_IN_ONE_WAVE));
+    // Wave 1 draws ONE lane, labelled with its own track, holding its rows,
+    // and its header states `· 1 track`.
+    expect(laneTracks(WAVE)).toEqual(["track-1"]);
+    expect(laneLabelTexts(WAVE)).toEqual(["track-1"]);
+    expect(laneNodeCrs(WAVE, "track-1")).toEqual(["CR-T-01", "CR-T-03"]);
+    expect(headerTrackCount(WAVE)).toBe(1);
+
+    // Wave 2's members declare no track: no lane and no track count.
+    expect(lanesEl(SECOND_WAVE)).toBeNull();
+    expect(headerTrackCount(SECOND_WAVE)).toBeNull();
+
+    // The other release's tracks appear nowhere in zone 2's chrome.
+    expect(laneTracks(WAVE)).not.toContain("track-7");
+    expect(laneTracks(WAVE)).not.toContain("track-9");
+    expect(boxText(WAVE)).not.toContain("track-7");
+    expect(boxText(WAVE)).not.toContain("track-9");
+    expect(boxText(SECOND_WAVE)).not.toContain("track-7");
+    expect(boxText(SECOND_WAVE)).not.toContain("track-9");
+
+    // Every member still drew, in its own wave.
+    expect(nodeCrs(WAVE)).toEqual(["CR-T-01", "CR-T-03"]);
+    expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
+  });
+
+  test("the solo twin: the same release read from a queue declaring only its one track draws no column, no lanes and no track count", async () => {
+    const queue = queueOf(ONE_TRACK_IN_ONE_WAVE);
+    expect(fixtureTracks(queue)).toEqual(["track-1"]);
+
+    await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue });
+    expect(waveNames()).toEqual([WAVE, SECOND_WAVE]);
+
+    expect(tableHasTrackColumn()).toBe(false);
     expect(lanesEl(WAVE)).toBeNull();
     expect(lanesEl(SECOND_WAVE)).toBeNull();
     expect(laneLabelTexts(WAVE)).toEqual([]);
     expect(headerTrackCount(WAVE)).toBeNull();
     expect(headerTrackCount(SECOND_WAVE)).toBeNull();
-    expect(boxText(WAVE)).not.toContain("track-7");
-    expect(boxText(SECOND_WAVE)).not.toContain("track-9");
-
-    // The absence is the scope's answer, not an empty zone: every member still
-    // drew, in its own wave.
+    expect(all(NO_TRACK_SEL)).toEqual([]);
     expect(nodeCrs(WAVE)).toEqual(["CR-T-01", "CR-T-03"]);
     expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
   });
@@ -1215,6 +1245,19 @@ const markedCrs = (wave: string): string[] =>
     .filter((node) => node.querySelector(".app-flow-node-next") !== null)
     .map((node) => node.getAttribute("data-cr") ?? "");
 
+// ── The `no track` marker ────────────────────────────────────────────────────────────────
+//
+// In a multi-track project every drawn row that declares no track and is not
+// merged carries ONE marker: `span[data-testid="roadmap-node-no-track"]` with
+// the class `app-flow-node-no-track`, the text `no track` and the exact title
+// below. It is a sibling of the node's annotation, never inside it, and a
+// click on it selects its row. A solo project never draws it.
+
+const NO_TRACK_SEL = '[data-testid="roadmap-node-no-track"]';
+
+const noTrackMarkers = (node: HTMLElement): HTMLElement[] =>
+  Array.from(node.querySelectorAll<HTMLElement>(NO_TRACK_SEL));
+
 describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track is the implicit solo lane: drawn in the body, outside the grid, with no chrome", () => {
   test("a mixed wave draws a node for EVERY member it draws, the untracked ones included, and draws none of them twice", async () => {
     await mountApp({ queue: queueOf(MIXED) });
@@ -1295,7 +1338,13 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
     }
   });
 
-  test("the untracked node sits in the wave body in the published order, byte-identical to the same fixture with its track data stripped", async () => {
+  // SUPERSEDED (cycle 1028). `MIXED` declares three tracks, so its project is
+  // multi-track and each untracked drawn row now carries the `no track`
+  // marker, with its `deps` text dropped. Byte identity therefore holds
+  // MODULO that one marker (`MIXED`'s untracked rows declare no dependency,
+  // so no `deps` text is lost here). The solo twin below keeps the unmodified
+  // guarantee for a project declaring one track.
+  test("the untracked node sits in the wave body in the published order, byte-identical to the same fixture with its track data stripped once its one `no track` marker is set aside", async () => {
     await mountApp({ queue: queueOf(MIXED_UNTRACKED) });
 
     // CR-078's arrangement for this membership, MEASURED rather than assumed —
@@ -1318,19 +1367,49 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
     for (const entry of drawnUntracked(MIXED)) {
       const node = nodeEl(WAVE, entry.cr);
       expect(node.parentElement).toBe(body);
-      // Byte-identical: the same element, drawn the same way, as the render
-      // that never saw a track.
+      // Exactly one `no track` marker — and once it is set aside, the same
+      // element, drawn the same way, as the render that never saw a track.
+      expect({ cr: entry.cr, markers: noTrackMarkers(node).length }).toEqual({
+        cr: entry.cr,
+        markers: 1,
+      });
       const unlaned = unlanedHtml.get(entry.cr);
       if (unlaned === undefined) {
         throw new Error(`the un-laned render drew no node for ${entry.cr} to compare against`);
       }
-      expect(node.outerHTML).toBe(unlaned);
+      const bare = node.cloneNode(true) as HTMLElement;
+      for (const marker of noTrackMarkers(bare)) marker.remove();
+      expect(bare.outerHTML).toBe(unlaned);
     }
 
     // …and the `+N more` pointer is still the body's LAST child, where CR-078
     // leaves it.
     const children = Array.from(body.children);
     expect(children[children.length - 1]?.getAttribute("data-testid")).toBe("roadmap-wave-more");
+  });
+
+  test("the solo twin: with its tracked members on ONE track, each untracked node is byte-identical to the track-stripped render and carries no marker", async () => {
+    const soloMixed: QueueFixture[] = MIXED.map((entry) =>
+      entry.track === undefined ? entry : { ...entry, track: "track-1" },
+    );
+    expect(fixtureTracks(queueOf(soloMixed))).toEqual(["track-1"]);
+
+    await mountApp({ queue: queueOf(MIXED_UNTRACKED) });
+    const unlanedHtml = new Map(
+      drawnUntracked(MIXED).map((entry) => [entry.cr, nodeEl(WAVE, entry.cr).outerHTML]),
+    );
+
+    await mountApp({ queue: queueOf(soloMixed) });
+    expect(lanesEl(WAVE)).toBeNull();
+    expect(all(NO_TRACK_SEL)).toEqual([]);
+    expect(bodyNodeCrs(WAVE)).toEqual(drawnMembers(soloMixed).map((entry) => entry.cr));
+    for (const entry of drawnUntracked(MIXED)) {
+      const unlaned = unlanedHtml.get(entry.cr);
+      if (unlaned === undefined) {
+        throw new Error(`the un-laned render drew no node for ${entry.cr} to compare against`);
+      }
+      expect(nodeEl(WAVE, entry.cr).outerHTML).toBe(unlaned);
+    }
   });
 
   test("the wave's node total, its `+N more` and its whole-membership count are the un-laned render's, mixed track data or not", async () => {
