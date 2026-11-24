@@ -1563,6 +1563,14 @@ const SECOND_TRACK_ELSEWHERE: QueueFixture[] = [
 /** The same payload with the other release's member REMOVED. */
 const SECOND_TRACK_REMOVED: QueueFixture[] = [...SHIPPED_MEMBERS.slice(1), ...ONE_TRACK];
 
+/** A multi-track project whose focused proposal declares NO track: both of the
+ *  project's tracks sit on the other release's members, one each. */
+const BOTH_TRACKS_ELSEWHERE: QueueFixture[] = [
+  OTHER_RELEASE_TRACK_2,
+  { ...SHIPPED_MEMBERS[1]!, track: "track-1" },
+  ...NO_TRACKS,
+];
+
 /** A dependency the annotation names in full (`bareDependencyId` shares only
  *  `CR-` with the row ids below, and `S-A` is not all digits). */
 const SHIPPED_DEP = "CR-S-A";
@@ -1680,6 +1688,22 @@ describe("the wiring: the queue the board serves decides whether the project is 
     expect(tableHasTrackColumn()).toBe(false);
 
     await mountApp({ queue: queueOf(NO_TRACKS) });
+    expect(tableHasTrackColumn()).toBe(false);
+  });
+
+  test("zone 3's `track` column does not show in a multi-track project whose focused release declares no track", async () => {
+    // Premise: the project declares two tracks, and the focused release none.
+    expect(fixtureTracks(BOTH_TRACKS_ELSEWHERE)).toEqual(["track-2", "track-1"]);
+    expect(fixtureTracks(NO_TRACKS)).toEqual([]);
+
+    await mountApp({ queue: BOTH_TRACKS_ELSEWHERE });
+    expect(flow().getAttribute("data-version")).toBe("0.4.0");
+    // The render reads the project as multi-track: every drawn live row of the
+    // untracked release carries the `no track` marker.
+    expect(noTrackCrs()).toEqual([...nodeCrs(WAVE)].sort());
+    expect(nodeCrs(WAVE).length).toBeGreaterThan(0);
+    // The table is drawn, and its head has no `track` column.
+    expect(document.querySelector('[data-testid="roadmap-table-head"]')).not.toBeNull();
     expect(tableHasTrackColumn()).toBe(false);
   });
 });
