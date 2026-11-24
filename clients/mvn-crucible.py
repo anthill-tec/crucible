@@ -961,8 +961,6 @@ _SKIP_SUREFIRE = ("-Dtest=!*", "-Dsurefire.failIfNoSpecifiedTests=false")
 #: The console line surefire and failsafe fail with when a pattern selects
 #: nothing.
 _NO_TESTS_MATCHING = "No tests matching pattern"
-#: The `run:` block of a run that was not filed: no figures.
-_UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
 
 
 def _run_surefire_tier(args, goal_extra, label, kinds=None):
@@ -1160,9 +1158,11 @@ def _refuse_empty_selection(label, kinds, args, project_dir, run_id, warnings):
     if run_id:
         closing = [_axi().abort_run(_post, _project_key(project_dir), args.agent,
                                     run_id, f"the {label} selection ran no test")]
-    return _refuse_tier_run(label, project_dir, getattr(args, "agent", None),
-                            refusal, code=_axi().TIER_SELECTION_EMPTY_CODE,
-                            warnings=list(warnings) + closing)
+    return _axi().refuse_tier_run(
+        _emit_axi, label,
+        _axi_context(project_dir, agent_id=getattr(args, "agent", None)),
+        refusal, code=_axi().TIER_SELECTION_EMPTY_CODE,
+        warnings=list(warnings) + closing)
 
 
 def _empty_selection_refusal(label, kinds, test_pattern, declared=None):
@@ -1178,19 +1178,6 @@ def _empty_selection_refusal(label, kinds, test_pattern, declared=None):
     narrowed = f" `-Dtest={test_pattern}`" if test_pattern else ""
     return (f"the `{label}` run's selection{narrowed} ran no test; nothing "
             f"was filed — widen the selection{declare}")
-
-
-def _refuse_tier_run(verb, project_dir, agent, refusal, code=None, warnings=()):
-    """A tier run refused before anything was filed: ONE `ok: false`
-    envelope naming why (and its `code`, when it has one). Returns the exit."""
-    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
-    fields = {"run": _UNFILED_RUN, "error": refusal}
-    if code:
-        fields["code"] = code
-    fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]
-    _emit_axi(verb, False, fields, _axi_context(project_dir, agent_id=agent),
-              list(warnings), f"{verb}: ok=False — {refusal}")
-    return 1
 
 
 def _emit_tier_run_axi(verb, resp, project_dir, agent, warnings=()):
@@ -1366,9 +1353,10 @@ def _refuse_test_property(args):
     for prop in getattr(args, "system_prop", None) or []:
         if prop.split("=", 1)[0].strip() != "test":
             continue
-        return _refuse_tier_run(
-            "integration", _resolve_project_dir(args.project_dir),
-            getattr(args, "agent", None),
+        return _axi().refuse_tier_run(
+            _emit_axi, "integration",
+            _axi_context(_resolve_project_dir(args.project_dir),
+                         agent_id=getattr(args, "agent", None)),
             f"`integration` hands surefire `-Dtest=!*` so that failsafe runs "
             f"alone, and `--system-prop {prop}` would replace that selection; "
             f"nothing was run — select integration tests with failsafe's own "
@@ -1390,8 +1378,11 @@ def _refuse_profile_flag(args, tier, declared):
     refusal = _profile_flag_refusal(args, tier, declared)
     if refusal is None:
         return None
-    return _refuse_tier_run(tier, _resolve_project_dir(args.project_dir),
-                            getattr(args, "agent", None), refusal)
+    return _axi().refuse_tier_run(
+        _emit_axi, tier,
+        _axi_context(_resolve_project_dir(args.project_dir),
+                     agent_id=getattr(args, "agent", None)),
+        refusal)
 
 
 def _profile_flag_refusal(args, tier, declared):

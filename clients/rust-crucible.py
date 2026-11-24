@@ -1395,8 +1395,10 @@ def cmd_test(args, tier=None, kinds=None, profile=None):
         profile, kinds, refusal = _resolve_tier_profile(args, tier, kinds,
                                                         project_dir)
         if refusal is not None:
-            return _refuse_tier_run(tier, project_dir, getattr(args, "agent", None),
-                                    refusal)
+            return _axi().refuse_tier_run(
+                _emit_axi, tier,
+                _axi_context(project_dir, agent_id=getattr(args, "agent", None)),
+                refusal)
     profile = profile or args.profile
     refused = _nextest_refusal(args, tier or "test", project_dir, profile)
     if refused is not None:
@@ -1452,8 +1454,8 @@ def _test_run(args, tier, kinds, profile, project_dir, identity):
                                              args.agent, None, abandoned, [],
                                              post_fn=_post)
         if empty:
-            return _refuse_tier_run(
-                verb, project_dir, args.agent,
+            return _axi().refuse_tier_run(
+                _emit_axi, verb, _axi_context(project_dir, agent_id=args.agent),
                 _empty_selection_refusal(tier, kinds, args.filter),
                 code=_axi().TIER_SELECTION_EMPTY_CODE)
     if not args.agent:
@@ -1672,19 +1674,6 @@ def _empty_selection_refusal(tier, kinds, user_filter):
             f"{narrowed} and `cargo nextest list` names no test it selects; "
             f"nothing was run — declare `[profile.{tier}]` in "
             f".config/nextest.toml to state this tier's tests yourself")
-
-
-def _refuse_tier_run(verb, project_dir, agent, refusal, code=None):
-    """A tier run refused before anything ran or was filed: ONE `ok: false`
-    envelope naming why (and its `code`, when it has one). Returns the exit."""
-    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
-    fields = {"run": _UNFILED_RUN, "error": refusal}
-    if code:
-        fields["code"] = code
-    fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]
-    _emit_axi(verb, False, fields, _axi_context(project_dir, agent_id=agent), [],
-              f"{verb}: ok=False — {refusal}")
-    return 1
 
 
 def cmd_check(args):

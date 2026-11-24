@@ -2362,6 +2362,23 @@ TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
 
 
+def refuse_tier_run(emit_fn, verb, context, refusal, code=None, warnings=()):
+    """A tier run refused before anything was filed: ONE `ok: false` envelope
+    through the client's `emit_fn`, its `run` unfiled, naming why (`refusal`)
+    and its `code` when it has one (`TIER_SELECTION_EMPTY_CODE`, say), with
+    the caller's `warnings`. Returns the exit, 1."""
+    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+    fields = {"run": dict.fromkeys(("passed", "failed", "pending", "total",
+                                    "files")),
+              "error": refusal}
+    if code:
+        fields["code"] = code
+    fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]
+    emit_fn(verb, False, fields, context, list(warnings),
+            f"{verb}: ok=False \u2014 {refusal}")
+    return 1
+
+
 def tier_run_undeclared_help(tier, declared, surface):
     """§S1/§S3 — the next moves for a tier with no declared target: declare one
     ON THIS STACK'S OWN SURFACE, or run a tier this client DOES run. The second
