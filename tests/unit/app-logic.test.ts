@@ -1021,3 +1021,59 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
     ]);
   });
 });
+
+describe("roadmapTableColumns — the project's tracks decide the `track` column with the rows, in one call", () => {
+  const BASE = ["cr", "title", "deps", "status"];
+  const row = (cr: string, wave: string, track?: string): Record<string, unknown> => ({
+    cr,
+    title: cr,
+    wave,
+    dependsOn: [],
+    status: "PENDING",
+    ...(track === undefined ? {} : { track }),
+  });
+
+  /** The focused rows: one declared track, two declared tracks, none. */
+  const ONE_TRACK_ROWS = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "1", "track-1")];
+  const TWO_TRACK_ROWS = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "1", "track-2")];
+  const NO_TRACK_ROWS = [row("CR-C-1", "1"), row("CR-C-2", "1")];
+
+  const MULTI = ["track-1", "track-2"];
+
+  test("in a multi-track project, rows declaring one track or more show the column, last", () => {
+    expect(AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, MULTI)).toEqual([...BASE, "track"]);
+    expect(AppLogic.roadmapTableColumns(TWO_TRACK_ROWS, MULTI)).toEqual([...BASE, "track"]);
+    // Across two waves the column still closes the list, after `wave`.
+    const twoWaves = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "2")];
+    expect(AppLogic.roadmapTableColumns(twoWaves, MULTI)).toEqual([...BASE, "wave", "track"]);
+  });
+
+  test("in a multi-track project, rows declaring no track show no column", () => {
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, MULTI)).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns([], MULTI)).toEqual(BASE);
+  });
+
+  test("a project declaring one track or none shows no column", () => {
+    expect(AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, ["track-1"])).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, ["track-1"])).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, [])).toEqual(BASE);
+  });
+
+  test("with no project list, the rows' own rule stands: the column only across two tracks", () => {
+    for (const project of [undefined, null] as const) {
+      expect({ project, one: AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, project) }).toEqual({
+        project,
+        one: BASE,
+      });
+      expect({ project, none: AppLogic.roadmapTableColumns(NO_TRACK_ROWS, project) }).toEqual({
+        project,
+        none: BASE,
+      });
+      expect({ project, two: AppLogic.roadmapTableColumns(TWO_TRACK_ROWS, project) }).toEqual({
+        project,
+        two: [...BASE, "track"],
+      });
+    }
+    expect(AppLogic.roadmapTableColumns(TWO_TRACK_ROWS)).toEqual([...BASE, "track"]);
+  });
+});
