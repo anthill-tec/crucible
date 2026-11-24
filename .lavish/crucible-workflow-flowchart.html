@@ -330,7 +330,7 @@
       packages — a packaging fix. Its table is empty with the same message. Not hidden, not back-filled.</p>
   </div>
 
-  <h2>4 · Multi-track <span class="n">— swimlanes only when tracks &gt; 1</span></h2>
+  <h2>4 · Multi-track <span class="n">— swimlanes when the project declares &gt; 1 track</span></h2>
   <div class="card">
     <div class="flow">
       <div class="arrow hot" style="flex:0 0 16px"></div>
@@ -357,6 +357,11 @@
     <p class="sub" style="margin:0">The table gains a <code>track</code> column in this case. Crucible is
       single-track, so neither lanes nor that column appear — correct, not a gap. Two CRs are concurrent
       <i>because they sit in different lanes</i>; no fan-out edges needed to say so.</p>
+    <p class="sub" style="margin:0"><b>The rule is the project's, not the wave's</b> (CR-CRU-275): a project whose whole
+      queue declares more than one track lanes EVERY wave by its own members' tracks, so a wave on one track draws one
+      lane and reads <code>· 1 track</code> — it never reads as Mainline's own work. A CR declaring no track there
+      carries a <code>no track</code> marker in place of its <code>deps</code> text. A laned wave box has a 360px
+      budget (the 54px label column and 5px gap on top of the ~300px unlaned box).</p>
   </div>
 
 
@@ -405,7 +410,8 @@
       <tr><td>Active-release focus</td><td>a release is in progress; else newest shipped</td><td class="yes">0.2.0</td></tr>
       <tr><td>Wave container</td><td>the focused release is the active one</td><td class="yes">W5 only</td></tr>
       <tr><td>Delivered summary</td><td>the focused release has shipped</td><td class="yes">0.1.0–0.1.3</td></tr>
-      <tr><td>Track lanes + table column</td><td>&gt; 1 track reported</td><td class="no">no — single track</td></tr>
+      <tr><td>Track lanes + table column</td><td>the <b>project</b> declares &gt; 1 track (whole queue); then every wave with a declared track is laned, one lane or more, in a 360px box</td><td class="no">no — single track</td></tr>
+      <tr><td><code>no track</code> marker</td><td>a multi-track project's unmerged CR declaring no track</td><td class="no">no — single track</td></tr>
       <tr><td>Wave column in the table</td><td>the release spans &gt; 1 wave</td><td class="yes">0.1.0 only</td></tr>
       <tr><td>Dashed gate</td><td><b>the orchestrator registered a proposed release</b>; one per proposal</td><td class="yes">0.2.0 — once registered</td></tr>
       <tr><td>Motion</td><td>the CR is <code>IN_PROGRESS</code></td><td class="no">none active</td></tr>
