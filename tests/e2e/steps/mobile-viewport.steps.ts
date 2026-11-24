@@ -198,6 +198,11 @@ Step("I cycle the density toggle to {string}", async ({ page }, mode: string) =>
     const current = await toggle.getAttribute("data-density");
     if (current === mode) return;
     await toggle.click();
+    // The board redraws `data-density` on a later tick, not inside the click:
+    // wait for the attribute to leave the value it had before this click, so
+    // the next read sees the mode the click landed on and the loop never
+    // clicks past it.
+    await expect(toggle).not.toHaveAttribute("data-density", current ?? "");
   }
   await expect(toggle).toHaveAttribute("data-density", mode);
 });
