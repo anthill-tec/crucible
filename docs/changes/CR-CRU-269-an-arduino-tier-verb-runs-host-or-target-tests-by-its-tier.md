@@ -1,6 +1,6 @@
 # CR-CRU-269 — an arduino tier verb runs host or target tests by its tier
 
-**Status:** PENDING.
+**Status:** COMPLETED (shipped 2026-11-25 on develop).
 
 - Filed 2026-11-21 from todo #27. The user ruled on 2026-11-15 that the unit/integration/e2e tier convention extends to
   every stack through one standard switch set, which each client translates to its own strategy.
@@ -204,3 +204,32 @@ Set by Mainline within those rulings, and approved with this spec:
 
 - A declaration is read where it is today: under `--dir`, defaulting to `tests/native`.
 - S3 also refuses a narrowed `unit` run that ran nothing, as rust's narrowed filter does.
+
+## Close-out (2026-11-25)
+
+Plan 276.
+
+- **Cycle 1025, RED/GREEN.**
+  - **RED.**
+    - A new integration module, `tests/client/integration/test_an_arduino_tier_verb_runs_host_or_target_tests.py`,
+      covers AC1–AC6, each with and without `--agent`.
+    - Three modules changed as the Tests section says.
+    - The Tests section first listed the narrowed-run module as a pin. Its `unit` zero-case tests contradicted AC5, so
+      they now follow AC5, and the section was corrected.
+  - **GREEN.**
+    - Arduino's place resolution (`_resolve_tier_place`, `_run_tier_place`).
+    - The refusal of a run with no case (`_refuse_no_case_run`).
+    - The shared `refuse_tier_run` in `clients/_crucible_axi.py`, now called by rust, maven and arduino.
+    - The help text, the RUNBOOK's "Arduino tier verbs" section and the CHANGELOG entry.
+- **Cycle 1026, VERIFY:** PASS, with two should-fix items and three notes.
+- **Cycle 1027, FIX.**
+  - The `module` and `bdd` refusals list only the tiers that run on the project.
+  - The `integration` and `e2e` refusals name `tests/native/Makefile`, or `--dir`'s Makefile.
+  - One shared `UNFILED_RUN`.
+  - The RED docstrings were reworded as pins.
+  - The empty-run assertions also check the message and the agent's sign-off.
+  - Each tightened test was shown failing without its fix.
+- **Pre-merge gate (cycle 1027):** 13,479 passed and 0 failed in about 24 minutes, with the unit-check stage clean
+  first. By suite: bun 5,076, python unit 2,624, python integration 5,779.
+- **For CR-CRU-270:** the hardware tiers are `e2e` (HIL, `tests/hil`) and `integration` (simulation, `tests/sim`).
+  Whether they can run hermetically is CR-CRU-270's question.
