@@ -88,9 +88,12 @@ colour means nothing:
          stops the AC6 fix from levelling the MECHANISM as it levels the
          vocabulary (§S3: "levelling the vocabulary must not level the
          mechanism").
-  PIN  `ArduinoSplitCellTest` and `ArduinoSplitCellDoesNotRefuseTest` —
-         `arduino unit` already runs the native-host `make junit` build in the
-         native dir and ingests under `unit`.
+  PIN  `ArduinoSplitCellTest.test_the_unit_cell_runs_the_native_host_build`
+         — `arduino unit` already runs the native-host `make junit` build in
+         the native dir and ingests under `unit`.
+  RED  `ArduinoSplitCellTest`'s `integration` and `e2e` cells and
+         `ArduinoSplitCellDoesNotRefuseTest` — `integration` runs `make junit`
+         in `tests/sim` and `e2e` in `tests/hil`; both refuse today.
   PIN  `ArduinoTierClaimMatchesTheWireTest.test_the_native_host_run_...`,
          `..._the_native_regression_run_...` and
          `..._the_target_build_stays_a_compile_ingest_with_no_test_tier` —
@@ -192,7 +195,9 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      one flag is not a split the client can read, so arduino `integration` is
      NOT asserted as a split cell here — it is left out of
      `TOOLCHAIN_SPLIT_CELLS` and needs a ruling. If it is ruled IN, this file
-     asserts it by adding one tuple entry.
+     asserts it by adding one tuple entry. RULED: arduino's tiers run by
+     place — `integration` in `tests/sim`, `e2e` in `tests/hil` — so both
+     are now split cells beside `unit` (`ARDUINO_PLACES`).
   7. §S3 gives rust `unit` → `--lib`, and `--lib` appears NOWHERE in
      `rust-crucible.py` today (`--test`, `--tests` and `--all-targets` do).
      The selector is real in cargo/nextest; it is the CLIENT that has no way
@@ -282,15 +287,18 @@ AGENT = "CR-CRU-111-C3-modality-probe"
 #            declared profile, and `e2e` only declared (`-Pe2e`)
 #   rust     nextest kind filters — `kind(lib) | kind(bin) | kind(proc-macro)`
 #            · `kind(test)`; `e2e` is declared (`[profile.e2e]`)
-#   arduino  the native host `g++`/`make` build
-#
-# arduino's "(+ `integration` where the native build separates it)" is NOT
-# here — see ESCALATION 6.
+#   arduino  `make junit` in each tier's own place: the native host build
+#            (`tests/native`), a simulator (`tests/sim`), the board
+#            (`tests/hil`) — see ESCALATION 6
 TOOLCHAIN_SPLIT_CELLS = {
     "mvn": ("unit", "integration"),
     "rust": ("unit", "integration"),
-    "arduino": ("unit",),
+    "arduino": ("unit", "integration", "e2e"),
 }
+
+# Where each of arduino's split cells runs `make junit`.
+ARDUINO_PLACES = {"unit": "tests/native", "integration": "tests/sim",
+                  "e2e": "tests/hil"}
 
 # Rust's kind filters, each the one `-E` element nextest is handed.
 RUST_UNIT_KINDS = "kind(lib) | kind(bin) | kind(proc-macro)"
@@ -793,6 +801,17 @@ class _ArduinoModalityCase(_ModalityCase):
         (reports / "TEST-probe.xml").write_text(_JUNIT_SUITE_ONE_PASS)
         return str(reports)
 
+    def place_dir(self, tier):
+        return os.path.join(self.tmpdir, *ARDUINO_PLACES[tier].split("/"))
+
+    def write_place(self, tier):
+        """`tier`'s place: a `Makefile` with only `junit`, and the one-pass
+        report its (non-writing) fake `make` leaves under `reports/`."""
+        reports = Path(self.place_dir(tier), "reports")
+        reports.mkdir(parents=True, exist_ok=True)
+        Path(self.place_dir(tier), "Makefile").write_text("junit:\n\t@echo junit\n")
+        (reports / "TEST-probe.xml").write_text(_JUNIT_SUITE_ONE_PASS)
+
 
 class _BunModalityCase(_ModalityCase):
     CLIENT = "bun"
@@ -1023,12 +1042,34 @@ class RustSplitCellsTest(_RustModalityCase):
 
 
 class ArduinoSplitCellTest(_ArduinoModalityCase):
-    """AC6, arduino's one split cell — "the native host `g++`/`make` build".
+    """AC6, arduino's split cells — `make junit` in each tier's own place.
 
     PIN — `arduino unit` already runs `make junit` IN the native dir and
     ingests under `unit`. It is the bound that keeps the native-host build
     distinguishable from the `arduino-cli` target build, which is the whole
-    reason §S3 calls arduino's three builds a split."""
+    reason §S3 calls arduino's three builds a split. RED — `integration`
+    (`tests/sim`) and `e2e` (`tests/hil`) refuse today."""
+
+    def assertPlaceCellRuns(self, tier):
+        cell = f"arduino/{tier}"
+        self.write_place(tier)
+        drive = self.drive(self.arduino_argv(tier))
+        runs = self.assertToolchainRan(drive, "make", cell)
+        self.assertEqual(
+            [(r["argv"], os.path.realpath(r["cwd"])) for r in runs],
+            [(["junit"], os.path.realpath(self.place_dir(tier)))],
+            f"AC6 — {cell}: `make junit` runs once, in {ARDUINO_PLACES[tier]}")
+        self.assertEqual(
+            self.invocations("fake-arduino-cli"), [],
+            f"AC6 — {cell}: the place's `make junit` is not the arduino-cli "
+            f"target build")
+        self.assertIngestedTier(drive, tier, cell)
+
+    def test_the_integration_cell_runs_make_junit_in_tests_sim(self):
+        self.assertPlaceCellRuns("integration")
+
+    def test_the_e2e_cell_runs_make_junit_in_tests_hil(self):
+        self.assertPlaceCellRuns("e2e")
 
     def test_the_unit_cell_runs_the_native_host_build(self):
         cell = "arduino/unit"
@@ -1097,10 +1138,12 @@ class RustSplitCellsDoNotRefuseTest(_RustModalityCase, _SplitCellRefusalProbe):
 
 
 class ArduinoSplitCellDoesNotRefuseTest(_ArduinoModalityCase, _SplitCellRefusalProbe):
-    """PIN — arduino's native-host `unit` cell is wired and does not refuse."""
+    """arduino's split cells do not refuse when their place exists: `unit`
+    (PIN) and `integration`/`e2e` (RED — both refuse today)."""
 
     def test_no_arduino_split_cell_demands_a_declaration(self):
-        self.write_native_reports()
+        for tier in TOOLCHAIN_SPLIT_CELLS["arduino"]:
+            self.write_place(tier)
         self.assertNoSplitCellRefuses(
             "arduino", lambda tier: [tier, "--project-dir", self.tmpdir])
 
