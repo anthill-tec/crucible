@@ -1,6 +1,6 @@
 # CR-CRU-275: a multi-track project's waves always show their track
 
-**Status:** PENDING.
+**Status:** COMPLETED (shipped 2026-11-25 on develop).
 
 - **Filed** 2026-11-24 on a CReq from Parti. The user took it into 0.5.0 wave 9, right after CR-CRU-269, with Parti's
   optional no-track warning included.
@@ -243,3 +243,27 @@ CR-CRU-085 and CR-CRU-108 are shipped and are not edited; this section records t
 | `roadmap-release-focus` and `roadmap-wave-drops-dead-crs` (integration) | re-run; change only if they fail for this CR's reason | integration | regression |
 
 There are no e2e tests: no server or wire change is made.
+
+## Close-out (2026-11-25)
+
+Plan 277.
+
+- **Cycle 1028, RED/GREEN.**
+  - **RED:** 34 new or rewritten tests. 24 failed for the spec's reasons, and 10 pinned what the spec keeps. The two
+    superseded tests were rewritten with solo-project twins, and the visual-grammar `QUEUE` was given one track.
+  - **GREEN:**
+    - `focusedReleaseView` publishes `projectTracks` and `untrackedRows`, and lanes every wave of a multi-track project.
+    - `app.js` draws the `no track` marker, the singular `· 1 track` and the project-level `track` column, with one CSS
+      rule.
+    - The DN §4, flowchart §4/§7 and CHANGELOG were updated.
+  - **A user ruling during GREEN:** in a multi-track project, a release whose members declare no track shows no `track`
+    column. It was recorded in S1 and AC11. `roadmap-release-focus` pinned it and was left unedited.
+- **Cycle 1029, VERIFY:** PASS, with two should-fix items and six notes.
+- **Cycle 1030, FIX:**
+  - the ruling's own test, in `roadmap-track-lanes`;
+  - `roadmapTableColumns(entries, projectTracks)` is now the one function that decides the column, with unit arms;
+  - the flowchart's §7 states the release condition, and its §4 the unmerged marker.
+- **Pre-merge gate (cycle 1030):**
+  - 13,517 passed and 0 failed in about 24 minutes, with the unit-check stage clean first.
+  - By suite: bun 5,114, python unit 2,624, python integration 5,779.
+- **Crucible's own roadmap is unchanged:** its queue declares no track.
