@@ -956,4 +956,68 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
       "status",
     ]);
   });
+
+  // THE PROJECT-LEVEL ARM. The roadmap decides whether a project is
+  // multi-track from the WHOLE queue it was read from, and the view publishes
+  // that list as `projectTracks` — the field this arm names for GREEN. It must
+  // be the published rule over the same rows: every release, every status,
+  // every lifecycle. Compared as a SET for the reason above (sorted on the
+  // server, first-appearance in the browser).
+  const ProjectBrowser = AppLogic as unknown as {
+    focusedReleaseView: (
+      gate: unknown,
+      releases: unknown,
+      entries: unknown,
+    ) => { tracks: string[]; projectTracks?: string[] };
+  };
+
+  const projectTrackSet = (rows: Array<Record<string, unknown>>): string[] | undefined => {
+    const published = ProjectBrowser.focusedReleaseView(GATE, [], rows).projectTracks;
+    return published === undefined ? undefined : [...published].sort();
+  };
+
+  test("the view's project track list classifies every case exactly as the published rule does", () => {
+    const measured = TRACK_FIXTURE.map((one) => ({
+      case: one.name,
+      server: serverTracks([one]),
+      project: projectTrackSet(rowsOf([one])),
+    }));
+
+    expect(measured).toEqual(
+      TRACK_FIXTURE.map((one) => ({
+        case: one.name,
+        server: expected(one),
+        project: expected(one),
+      })),
+    );
+  });
+
+  test("over a queue spanning releases, statuses and lifecycles, the view's project track list equals the published rule over the same rows", () => {
+    const at = 1787200000000;
+    const beyond: Array<Record<string, unknown>> = [
+      // Another release's member: in the project, outside the focus.
+      { cr: "CR-AC7-A", title: "another release", wave: "9", dependsOn: [], status: "PENDING", seq: 1, release: "0.3.0", track: "track-5" },
+      // A merged member of the focus.
+      { cr: "CR-AC7-B", title: "merged", wave: "5", dependsOn: [], status: "COMPLETED", seq: 200, release: RELEASE, track: "track-6" },
+      // Two dead members of the focus.
+      { cr: "CR-AC7-C", title: "void", wave: "5", dependsOn: [], status: "PENDING", seq: 210, release: RELEASE, track: "track-7", lifecycle: { state: "VOID", reason: "retired", at } },
+      { cr: "CR-AC7-D", title: "superseded", wave: "5", dependsOn: [], status: "PENDING", seq: 220, release: RELEASE, track: "track-8", lifecycle: { state: "SUPERSEDED", by: "CR-AC7-B", at } },
+    ];
+    const rows = [...beyond, ...rowsOf(TRACK_FIXTURE)];
+    const server = declaredTracks(rows as unknown as ReadonlyArray<{ track?: string | null }>);
+
+    // Non-vacuity: the published rule counts every one of those rows.
+    expect(server).toEqual(["2", "track-2", "track-5", "track-6", "track-7", "track-8"]);
+
+    expect(projectTrackSet(rows)).toEqual(server);
+    // …while the release-level list keeps its own scope: the other release's
+    // track is not in it.
+    expect([...ProjectBrowser.focusedReleaseView(GATE, [], rows).tracks].sort()).toEqual([
+      "2",
+      "track-2",
+      "track-6",
+      "track-7",
+      "track-8",
+    ]);
+  });
 });
