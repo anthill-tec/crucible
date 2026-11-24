@@ -65,6 +65,8 @@ TIER_RUN_UNDECLARED = "tier-run-undeclared"
 TIER_SELECTION_EMPTY = "tier-selection-empty"
 # The refusal's help line naming the tier verbs that run on this project.
 RUNS_TODAY = "tier verbs this client runs today: "
+# Where the client closes the identity its run opened.
+UNREGISTER_PATH = "/api/v2/agents/unregister"
 
 NATIVE = "tests/native"
 SIM = "tests/sim"
@@ -308,13 +310,19 @@ class _TierProject(unittest.TestCase):
                          set(tiers), f"help={help_lines!r}")
 
     def assertSelectionEmpty(self, result, agent=None):
-        """`tier-selection-empty`: `ok: false`, exit 1, no run filed; with an
-        agent the one run opened is aborted, without one nothing is posted."""
+        """`tier-selection-empty`: `ok: false`, exit 1, no run filed, and
+        the message says no case ran and no board or simulator may have
+        answered; with an agent the one run opened is aborted and the agent's
+        identity closed, without one nothing is posted."""
         envelope = self.envelope_of(result)
         self.assertIs(envelope.get("ok"), False, _diagnostics(result))
         self.assertEqual(result.returncode, 1, _diagnostics(result))
         self.assertIn(TIER_SELECTION_EMPTY, _codes(envelope),
                       f"envelope={envelope!r}")
+        error = str(envelope.get("error"))
+        for fragment in ("no case ran", "no board or simulator may have answered"):
+            self.assertIn(fragment, error, f"the message says {fragment!r}; "
+                                           f"envelope={envelope!r}")
         self.assertEqual([p for p, _ in self.board.posts() if p in INGEST_PATHS],
                          [], f"no run is filed; {_diagnostics(result)}")
         if agent is None:
@@ -327,6 +335,10 @@ class _TierProject(unittest.TestCase):
         self.assertEqual([p for p, _ in self.board.aborts()],
                          [f"/api/v2/runs/{opened[0]}/abort"] if opened else [],
                          f"the opened run is aborted; {_diagnostics(result)}")
+        self.assertEqual([b.get("agentId") for p, b in self.board.posts()
+                          if p == UNREGISTER_PATH and isinstance(b, dict)],
+                         [agent], f"the agent's identity is closed; "
+                                  f"{_diagnostics(result)}")
 
 
 # ── AC1 — `unit` runs the native host tests, or a declared `junit-unit` ────
