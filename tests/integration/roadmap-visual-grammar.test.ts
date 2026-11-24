@@ -318,6 +318,11 @@ const QUEUE: QueueFixture[] = [
     track: "1",
   },
   // ── 0.2.0, wave W2 — PENDING, plus AC27's second axis on two of them ────
+  //
+  // ONE declared track across the whole board, W2 included: a queue declaring
+  // two makes the project multi-track, and a multi-track project lanes every
+  // wave — a one-lane box is 59px wider than the UNLANED box every geometry
+  // reading on this board is measured against.
   {
     cr: "CR-V-PEND",
     title: "CR-V-PEND — nothing to report yet",
@@ -326,7 +331,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 13,
     release: "0.2.0",
-    track: "2",
+    track: "1",
   },
   {
     cr: "CR-V-SUP",
@@ -336,7 +341,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 14,
     release: "0.2.0",
-    track: "2",
+    track: "1",
     lifecycle: { state: "SUPERSEDED", by: "CR-V-LIVE", at: RETIRED_AT },
   },
   {
@@ -347,7 +352,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 15,
     release: "0.2.0",
-    track: "2",
+    track: "1",
     lifecycle: { state: "VOID", reason: "the surface it targeted was retired", at: RETIRED_AT },
   },
 ];
