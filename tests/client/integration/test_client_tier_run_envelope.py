@@ -305,6 +305,10 @@ RUST_ZERO_DISCOVERY_VERB = "regression"
 # case is refused as an empty selection before anything is filed, so the
 # runner finding no test is driven on `regression`, which still files it.
 MVN_ZERO_DISCOVERY_VERB = "regression"
+# arduino's likewise: a `unit` run whose reports hold no case is refused as an
+# empty selection, so the runner finding no test is driven on `regression`,
+# which still files it.
+ARDUINO_ZERO_DISCOVERY_VERB = "regression"
 
 
 # ── fixtures: junit payloads for the three RUN outcomes ────────────────────
@@ -949,9 +953,10 @@ class ArduinoIngestedTierEnvelopeTest(_EnvelopeTierProbe,
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
-        where = "arduino unit / zero-discovery"
+        where = f"arduino {ARDUINO_ZERO_DISCOVERY_VERB} / zero-discovery"
         self.write_native(_JUNIT_SUITE_ZERO)
-        drive = self.drive(self.unit_argv())
+        drive = self.drive(self.arduino_argv(ARDUINO_ZERO_DISCOVERY_VERB,
+                                             ["--dir", self.NATIVE_DIR]))
         self.assertReachedZeroDiscovery(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 

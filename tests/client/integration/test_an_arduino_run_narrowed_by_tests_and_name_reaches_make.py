@@ -22,8 +22,10 @@ is argparse's own usage error (exit 2), as on bun.
 
 A narrowed run whose reports hold zero cases is the ran-nothing failure even
 when `make` exits 0 (Unity with a `-f` that matches nothing does): the open
-run is aborted, nothing is filed, the exit is non-zero. An unnarrowed
-zero-case run that exits 0 is filed as before.
+run is aborted, nothing is filed, the exit is non-zero. On `test` an
+unnarrowed zero-case run that exits 0 is filed as before; on `unit` any run
+whose reports hold no case is refused as an empty selection
+(`tier-selection-empty`).
 
 Every case drives the real `clients/arduino-crucible.py` as a subprocess over
 a scratch firmware project whose `tests/native/Makefile` runs a small python
@@ -70,6 +72,7 @@ from tests.client.an_arduino_run_narrowed_by_tests_and_name_reaches_make_helpers
 REFUSED_CODE = "narrowing-refused"
 UNATTRIBUTED_CODE = "unattributed-run-refused"
 RAN_NOTHING_CODE = "no-test-reports"
+TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
 STEM_HINT = "give a stem, not a path or file name"
 NAME_HINT = "--name takes comma-separated test-name fragments"
 
@@ -411,8 +414,8 @@ class UnitVerbNarrowingRefusedTest(_NarrowingRefused, unittest.TestCase):
 # ── a narrowed run that ran nothing fails ───────────────────────────────────
 
 class _NarrowedRunThatRanNothing(_NarrowingProject):
-    """A narrowed run whose Makefile exits 0 over a zero-case report is the
-    ran-nothing failure; an unnarrowed one is filed as before."""
+    """A run whose Makefile exits 0 over a zero-case report, filing to a
+    recording board."""
 
     def setUp(self):
         self.board = RecordingBoard()
@@ -420,6 +423,14 @@ class _NarrowedRunThatRanNothing(_NarrowingProject):
 
     def install(self):
         install_project(self.project, self.board.url, "arduino-narrowed-ran-nothing")
+
+
+class TestVerbNarrowedRunThatRanNothingTest(_NarrowedRunThatRanNothing,
+                                            unittest.TestCase):
+    """`test`: a narrowed run that ran nothing is the ran-nothing failure; an
+    unnarrowed zero-case run is filed as before."""
+
+    VERB = "test"
 
     def test_a_narrowed_run_that_matches_nothing_fails_and_files_nothing(self):
         self.make_project()
@@ -474,14 +485,61 @@ class _NarrowedRunThatRanNothing(_NarrowingProject):
                          "a filed run is never aborted")
 
 
-class TestVerbNarrowedRunThatRanNothingTest(_NarrowedRunThatRanNothing,
-                                            unittest.TestCase):
-    VERB = "test"
+def _codes(value):
+    """Every value of a `code` key anywhere in an envelope."""
+    if isinstance(value, dict):
+        return [c for key, inner in value.items()
+                for c in ([inner] if key == "code" and isinstance(inner, str)
+                          else _codes(inner))]
+    if isinstance(value, list):
+        return [c for inner in value for c in _codes(inner)]
+    return []
 
 
 class UnitVerbNarrowedRunThatRanNothingTest(_NarrowedRunThatRanNothing,
                                             unittest.TestCase):
+    """`unit`: a run whose reports hold no case, narrowed or not, is refused
+    as an empty selection — `ok:false`, `tier-selection-empty`, exit 1,
+    nothing filed, the run it opened aborted."""
+
     VERB = "unit"
+
+    def assert_refused_as_an_empty_selection(self, result):
+        envelope = self.envelope_of(result)
+        self.assertEqual(
+            (envelope.get("verb"), envelope.get("ok")), ("unit", False),
+            f"envelope={envelope!r}")
+        self.assertIn(TIER_SELECTION_EMPTY_CODE, _codes(envelope),
+                      f"envelope={envelope!r}")
+        self.assertEqual(result.returncode, 1, _diagnostics(result))
+        posts = self.board.posts()
+        self.assertEqual(
+            [p for p, _ in posts if p in INGEST_PATHS], [],
+            f"nothing is filed; posts={[p for p, _ in posts]!r}")
+        starts = [p for p, _ in posts if p == START]
+        self.assertEqual(
+            (len(starts), len(self.board.aborts())), (1, 1),
+            f"the one run opened before `make` is aborted; "
+            f"posts={[p for p, _ in posts]!r}")
+
+    def test_a_narrowed_run_that_matches_nothing_is_refused_as_an_empty_selection(self):
+        self.make_project()
+        self.install()
+        result = self.drive("unit", "--name", "nomatch",
+                            agent="ard-ran-nothing-unit-narrowed")
+        record = self.the_one_make_run(result)
+        self.assertEqual(
+            record.get("test_name"), "nomatch",
+            f"`make` ran narrowed by TEST_NAME=\"nomatch\"; recorded={record!r} "
+            f"{_diagnostics(result)}")
+        self.assert_refused_as_an_empty_selection(result)
+
+    def test_an_unnarrowed_zero_case_run_is_refused_as_an_empty_selection(self):
+        self.make_project(catalogue=())
+        self.install()
+        result = self.drive("unit", agent="ard-ran-nothing-unit-unnarrowed")
+        self.the_one_make_run(result)
+        self.assert_refused_as_an_empty_selection(result)
 
 
 # ── a TESTS / TEST_NAME exported in the shell never reaches `make` ──────────

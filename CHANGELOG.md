@@ -57,6 +57,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
   is aborted, and no compile record is filed. A tier run with no `--agent` now sends Maven's console to
   stderr, so stdout carries only an envelope. The gate's row for a declared profile says the profile was not
   activated. The RUNBOOK has a new "Maven tier verbs" section.
+- **An arduino tier verb runs host or target tests by its tier.** The arduino client's `integration` now runs
+  `make junit` in `tests/sim` and `e2e` in `tests/hil`, beside `unit` in `tests/native`, instead of refusing
+  without a declared target. A `junit-<tier>` target declared in `tests/native/Makefile` runs instead, on `unit`
+  too, and `--dir` names another directory whose Makefile alone is read. `integration` and `e2e` with neither a
+  place nor a declaration answer `tier-run-undeclared`, naming both. **A `unit`, `integration` or `e2e` run whose
+  reports hold no case, or only skipped ones, is now refused** with `tier-selection-empty` and files nothing; a
+  narrowed `unit` run that matched nothing takes this refusal too. `regression` and the gate are unchanged. Rust's,
+  maven's and arduino's tier-run refusals share one helper. The RUNBOOK has a new "Arduino tier verbs" section.
 - **The source package carries only what builds the wheel.** The `crucible-axi` sdist now holds the
   `crucible_axi` package and the client fleet, plus the project metadata (`pyproject.toml`, the
   README, the licence and this changelog), instead of the whole repository. The wheel built from it
