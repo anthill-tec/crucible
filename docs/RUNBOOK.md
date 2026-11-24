@@ -598,8 +598,10 @@ and is filed under the verb's tier.
 
 **Nothing to run is refused.** `integration` with no `junit-integration` and no `tests/sim/Makefile`, `e2e` with no
 `junit-e2e` and no `tests/hil/Makefile`, and `module` or `bdd` with no declaration answer `ok: false` with code
-`tier-run-undeclared` and exit 1. Nothing runs and nothing reaches the board. The help names both ways out: declare
-`junit-<tier>` in `tests/native/Makefile`, or add the place's Makefile. `unit` always has its place.
+`tier-run-undeclared` and exit 1. Nothing runs and nothing reaches the board. For `integration` and `e2e` the help
+names both ways out: declare `junit-<tier>` in `tests/native/Makefile`, or add the place's Makefile. For `module`
+and `bdd`, which have no place, it names the `junit-<tier>` declaration in the Makefile under `--dir` (default
+`tests/native`). Either refusal lists the tier verbs that run on this project. `unit` always has its place.
 
 **A run in which no case ran is refused.** On `unit`, `integration` and `e2e`, a run whose reports hold no case, or
 only skipped cases, answers `ok: false` with code `tier-selection-empty` and exit 1, with or without `--agent`. No
