@@ -4299,6 +4299,12 @@
       const rows = view === null ? entries : view.members;
       // AC12 — one decision, made from the rows, for the head and the cells.
       const columns = L.roadmapTableColumns(rows);
+      // The `track` column goes with the lanes: a multi-track PROJECT
+      // (`view.projectTracks`) shows it even when the focused release's
+      // members declare one track; otherwise the release rule above stands.
+      if (view !== null && view.projectTracks.length > 1 && !columns.includes("track")) {
+        columns.push("track");
+      }
       // AC13 — the rendered order IS the published order. No sort, no walk.
       const plans = Array.from(state.plans);
       const openPlans = plans.filter((p) => p.status === "open");
@@ -4494,7 +4500,7 @@
     // its tooltip) is the DETAIL surface, not a substitute for the node's word.
     // An entry with no `lifecycle` key still gets no attribute and no span:
     // absent, never defaulted.
-    const RoadmapFlowNode = (entry, marked) => {
+    const RoadmapFlowNode = (entry, marked, untracked) => {
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
       // AC17 — read on the NODE's own binding rather than the panel's: a
       // selection paints one outline, and must not rebuild the strip above it
@@ -4586,7 +4592,13 @@
           : [];
       const annotation = [];
       if (marked === true) annotation.push(span({ class: "app-flow-node-next" }, "next"));
-      if (deps.length > 0) {
+      // An untracked row of a multi-track project (`box.untrackedRows`) carries
+      // the `no track` marker IN PLACE of its `deps` part: the box's width
+      // budget holds one or the other, and zone 3's table still lists the
+      // dependencies. The marker is the node's own child, beside the
+      // annotation and never inside it, with no handler of its own, so a
+      // click on it bubbles to the row and selects it like any other click.
+      if (deps.length > 0 && untracked !== true) {
         // CR-CRU-109 §S1 — the cap bounds the TEXT and nothing else: `deps` is
         // sliced for rendering while `entry.dependsOn` above is read whole by
         // every consumer that resolves an id.
@@ -4612,6 +4624,16 @@
               },
               lifecycle.text,
             ),
+        untracked === true
+          ? span(
+              {
+                "data-testid": "roadmap-node-no-track",
+                class: "app-flow-node-no-track",
+                title: "no track — this CR falls to Mainline until it is given one",
+              },
+              "no track",
+            )
+          : null,
         // AC13's second half is an ABSENCE: a row that is neither marked nor
         // declares a dependency renders NO slot at all, never an empty one.
         annotation.length === 0
@@ -4645,7 +4667,9 @@
           // release whose only actionable work is unwaved is the case it exists for.
           div(
             { class: "app-flow-loose" },
-            box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+            box.rows.map((entry) =>
+              RoadmapFlowNode(entry, nextCr === entry.cr, box.untrackedRows.includes(entry)),
+            ),
           )
         : div(
             {
@@ -4684,11 +4708,12 @@
               // It is a SEGMENT OF THE IDENTITY PHRASE, not a third child: the
               // design's header is two spans (`<span>Wave 5 · active · 2
               // tracks</span><span>20</span>`), so the count belongs inside
-              // the label the phrase is already written in. Never singular:
-              // lanes exist only above one track.
+              // the label the phrase is already written in. Singular for ONE
+              // lane, which a multi-track project draws for a wave on a
+              // single track (`· 1 track`), plural otherwise.
               span(
                 { class: "app-flow-wave-label" },
-                `Wave ${box.wave}${box.active === true ? " · active" : ""}${box.lanes.length > 0 ? ` · ${box.lanes.length} tracks` : ""}`,
+                `Wave ${box.wave}${box.active === true ? " · active" : ""}${box.lanes.length > 0 ? ` · ${box.lanes.length} ${box.lanes.length === 1 ? "track" : "tracks"}` : ""}`,
               ),
               span(
                 { "data-testid": "roadmap-wave-count", class: "app-flow-wave-count" },
@@ -4781,8 +4806,13 @@
               // are the box's `rows` entire (`soloRows` is the published
               // remainder), so the box draws every node it counts. With no
               // lanes published `soloRows` IS `box.rows`, so this one line is
-              // also CR-CRU-078's flat list, unchanged (AC2/AC6).
-              box.soloRows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+              // also CR-CRU-078's flat list, unchanged (AC2/AC6). In a
+              // multi-track project an untracked row here carries the
+              // `no track` marker (`box.untrackedRows`); a solo project
+              // publishes none, so its rows draw exactly as before.
+              box.soloRows.map((entry) =>
+                RoadmapFlowNode(entry, nextCr === entry.cr, box.untrackedRows.includes(entry)),
+              ),
               // §S5.4/AC16 — a static POINTER at that detail surface, and by
               // §S8 deliberately NOT a node: no `roadmap-node` test id, no
               // `data-cr`, no `data-status`, no `data-drill-source` and no
