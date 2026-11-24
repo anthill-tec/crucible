@@ -1205,12 +1205,18 @@ def _run_tier_place(args, tier):
     """The place-run tier verbs' one body: resolve the place and target
     (`_resolve_tier_place`), run them under the verb's tier, and refuse a run
     in which no case ran. Neither found is `tier-run-undeclared`, its help
-    naming the place's Makefile and the `junit-<tier>` declaration."""
+    naming both ways out: the `junit-<tier>` declaration in the Makefile the
+    client reads (`--dir`'s, else `tests/native/Makefile`), and the place's
+    Makefile."""
     resolved = _resolve_tier_place(args, tier)
     if resolved is None:
+        read_from = (getattr(args, "dir", None) or _NATIVE_PLACE).replace("\\", "/")
+        surface = _TIER_DECLARATION_SURFACE._replace(
+            names=f"a native-host `make` target for it in {read_from}/Makefile "
+                  f"(e.g. `make <target>`)")
         refusal = _axi().TierRunUndeclared(
             tier, _runnable_tiers(args),
-            _axi().declared_tier_surface_line(_TIER_DECLARATION_SURFACE, tier))
+            _axi().declared_tier_surface_line(surface, tier))
         refusal.help.insert(
             1, f"or add {_TIER_PLACES[tier]}/Makefile with a `junit` target, "
                f"the {tier} tests' own place, then re-run `{tier}`; or name "
