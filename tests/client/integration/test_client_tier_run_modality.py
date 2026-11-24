@@ -91,9 +91,10 @@ colour means nothing:
   PIN  `ArduinoSplitCellTest.test_the_unit_cell_runs_the_native_host_build`
          — `arduino unit` already runs the native-host `make junit` build in
          the native dir and ingests under `unit`.
-  RED  `ArduinoSplitCellTest`'s `integration` and `e2e` cells and
+  PIN  `ArduinoSplitCellTest`'s `integration` and `e2e` cells and
          `ArduinoSplitCellDoesNotRefuseTest` — `integration` runs `make junit`
-         in `tests/sim` and `e2e` in `tests/hil`; both refuse today.
+         in `tests/sim` and `e2e` in `tests/hil` when the place has its
+         Makefile, and neither refuses.
   PIN  `ArduinoTierClaimMatchesTheWireTest.test_the_native_host_run_...`,
          `..._the_native_regression_run_...` and
          `..._the_target_build_stays_a_compile_ingest_with_no_test_tier` —
@@ -1047,8 +1048,9 @@ class ArduinoSplitCellTest(_ArduinoModalityCase):
     PIN — `arduino unit` already runs `make junit` IN the native dir and
     ingests under `unit`. It is the bound that keeps the native-host build
     distinguishable from the `arduino-cli` target build, which is the whole
-    reason §S3 calls arduino's three builds a split. RED — `integration`
-    (`tests/sim`) and `e2e` (`tests/hil`) refuse today."""
+    reason §S3 calls arduino's three builds a split. PIN — `integration`
+    runs `make junit` in `tests/sim` and `e2e` in `tests/hil`, each ingested
+    under its own tier."""
 
     def assertPlaceCellRuns(self, tier):
         cell = f"arduino/{tier}"
@@ -1138,8 +1140,8 @@ class RustSplitCellsDoNotRefuseTest(_RustModalityCase, _SplitCellRefusalProbe):
 
 
 class ArduinoSplitCellDoesNotRefuseTest(_ArduinoModalityCase, _SplitCellRefusalProbe):
-    """arduino's split cells do not refuse when their place exists: `unit`
-    (PIN) and `integration`/`e2e` (RED — both refuse today)."""
+    """PIN — arduino's split cells do not refuse when their place exists:
+    `unit`, `integration` and `e2e` each run in it."""
 
     def test_no_arduino_split_cell_demands_a_declaration(self):
         for tier in TOOLCHAIN_SPLIT_CELLS["arduino"]:
