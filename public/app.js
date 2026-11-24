@@ -4301,8 +4301,14 @@
       const columns = L.roadmapTableColumns(rows);
       // The `track` column goes with the lanes: a multi-track PROJECT
       // (`view.projectTracks`) shows it even when the focused release's
-      // members declare one track; otherwise the release rule above stands.
-      if (view !== null && view.projectTracks.length > 1 && !columns.includes("track")) {
+      // members declare ONE track; a release declaring none has no lanes, so
+      // it has no column either. Otherwise the release rule above stands.
+      if (
+        view !== null &&
+        view.projectTracks.length > 1 &&
+        view.tracks.length > 0 &&
+        !columns.includes("track")
+      ) {
         columns.push("track");
       }
       // AC13 — the rendered order IS the published order. No sort, no walk.
