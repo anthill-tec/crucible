@@ -4298,19 +4298,12 @@
       // RoadmapPanel renders it instead of these three zones.)
       const rows = view === null ? entries : view.members;
       // AC12 — one decision, made from the rows, for the head and the cells.
-      const columns = L.roadmapTableColumns(rows);
-      // The `track` column goes with the lanes: a multi-track PROJECT
-      // (`view.projectTracks`) shows it even when the focused release's
-      // members declare ONE track; a release declaring none has no lanes, so
-      // it has no column either. Otherwise the release rule above stands.
-      if (
-        view !== null &&
-        view.projectTracks.length > 1 &&
-        view.tracks.length > 0 &&
-        !columns.includes("track")
-      ) {
-        columns.push("track");
-      }
+      // The PROJECT's tracks (`view.projectTracks`) go in with them, so the
+      // `track` column's project-level rule is decided in that one call too.
+      const columns = L.roadmapTableColumns(
+        rows,
+        view === null ? undefined : view.projectTracks,
+      );
       // AC13 — the rendered order IS the published order. No sort, no walk.
       const plans = Array.from(state.plans);
       const openPlans = plans.filter((p) => p.status === "open");

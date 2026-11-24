@@ -367,8 +367,14 @@ export declare function compressWaveRuns(
 ): string[];
 
 /** CR-CRU-078 §S5/AC12 — the columns zone 3 shows for the rows it was given:
- *  `wave` only across waves, `track` only across reported tracks. */
-export declare function roadmapTableColumns(entries: readonly unknown[] | null | undefined): string[];
+ *  `wave` only across waves, `track` only across reported tracks. Given the
+ *  project's declared tracks (`FocusedReleaseView.projectTracks`) and more
+ *  than one of them, `track` shows when the rows declare one track or more,
+ *  and never when they declare none. `track` is always the last column. */
+export declare function roadmapTableColumns(
+  entries: readonly unknown[] | null | undefined,
+  projectTracks?: readonly string[] | null,
+): string[];
 
 /** CR-CRU-078 §S5/AC11 — the CR's own H1 without the leading id the row
  *  already carries; `""` for an absent title, and never truncated. */

@@ -1408,12 +1408,21 @@ const ROADMAP_BASE_COLUMNS = ["cr", "title", "deps", "status"];
  *
  * The decision is made from the ROWS, once, so the head and every cell cannot
  * disagree about which columns exist.
+ *
+ * `projectTracks` is the PROJECT's declared track list (`focusedReleaseView`'s
+ * `projectTracks`). In a multi-track project — more than one — the `track`
+ * column goes with the lanes: it shows when the rows declare ONE track or
+ * more, and a release whose rows declare none has no lanes, so it has no
+ * column either. Absent, or one track or none, the rows' own rule stands.
+ * `track` is always the last column.
  */
-export function roadmapTableColumns(entries) {
+export function roadmapTableColumns(entries, projectTracks) {
   const rows = Array.isArray(entries) ? entries : [];
   const columns = [...ROADMAP_BASE_COLUMNS];
   if (distinctLabels(rows, "wave").length > 1) columns.push("wave");
-  if (distinctLabels(rows, "track").length > 1) columns.push("track");
+  const rowTracks = distinctLabels(rows, "track").length;
+  const multiTrackProject = Array.isArray(projectTracks) && projectTracks.length > 1;
+  if (rowTracks > 1 || (multiTrackProject && rowTracks > 0)) columns.push("track");
   return columns;
 }
 
