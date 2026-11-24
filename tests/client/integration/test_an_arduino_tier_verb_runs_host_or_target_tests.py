@@ -63,6 +63,8 @@ PROJECT_KEY = "arduino-tier-places-key"
 
 TIER_RUN_UNDECLARED = "tier-run-undeclared"
 TIER_SELECTION_EMPTY = "tier-selection-empty"
+# The refusal's help line naming the tier verbs that run on this project.
+RUNS_TODAY = "tier verbs this client runs today: "
 
 NATIVE = "tests/native"
 SIM = "tests/sim"
@@ -294,6 +296,17 @@ class _TierProject(unittest.TestCase):
         self.assertEqual([p for p, _ in self.board.posts()], [],
                          "nothing reaches the board")
 
+    def assertRunsToday(self, result, *tiers):
+        """The refusal's `help[]` names exactly `tiers` as the tier verbs
+        this client runs on this project."""
+        help_lines = [str(line) for line in self.envelope_of(result).get("help") or []]
+        listed = [line[len(RUNS_TODAY):] for line in help_lines
+                  if line.startswith(RUNS_TODAY)]
+        self.assertEqual(len(listed), 1, f"one line names the tiers run "
+                                         f"today; help={help_lines!r}")
+        self.assertEqual({tier.strip() for tier in listed[0].split(",")},
+                         set(tiers), f"help={help_lines!r}")
+
     def assertSelectionEmpty(self, result, agent=None):
         """`tier-selection-empty`: `ok: false`, exit 1, no run filed; with an
         agent the one run opened is aborted, without one nothing is posted."""
@@ -456,6 +469,19 @@ class ATierWithNoPlaceAndNoDeclarationIsRefusedTest(_TierProject):
 
     def test_bdd_without_an_agent_with_no_declaration_is_refused(self):
         self.assertUndeclared(self.drive("bdd"), "Makefile", "junit-bdd")
+
+    def test_a_module_refusal_names_only_the_tiers_that_run_here(self):
+        """No `tests/sim`, no `tests/hil` and no declaration: `integration`
+        and `e2e` would refuse too, so the refusal never sends a caller
+        there."""
+        result = self.drive("module", agent="ard-tier-module-runnable")
+        self.assertUndeclared(result, "junit-module")
+        self.assertRunsToday(result, "unit", "regression")
+
+    def test_a_bdd_refusal_names_only_the_tiers_that_run_here(self):
+        result = self.drive("bdd")
+        self.assertUndeclared(result, "junit-bdd")
+        self.assertRunsToday(result, "unit", "regression")
 
 
 # ── AC4 — TESTS and TEST_NAME from the shell never reach `make` ────────────
