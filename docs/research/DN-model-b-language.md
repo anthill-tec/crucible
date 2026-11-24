@@ -87,6 +87,12 @@ schema with different actors present**: `track` absent = implicit solo lane
 context absent = plain run cards. Every degradation is graceful because the
 model is uniform (round 29) — the difference is never structural.
 
+The "`track` absent = implicit solo lane, no UI noise" clause governs a
+project whose queue declares one track or none (CR-CRU-275). A project whose
+queue declares more than one track is multi-track: on the roadmap every wave
+names its track, even a wave on one track, and a CR declaring no track is
+marked `no track`, because it falls to Mainline until it is given one.
+
 ## 5 CR mapping (where the language lands in code)
 
 | CR | Carries |

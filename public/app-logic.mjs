@@ -1408,12 +1408,21 @@ const ROADMAP_BASE_COLUMNS = ["cr", "title", "deps", "status"];
  *
  * The decision is made from the ROWS, once, so the head and every cell cannot
  * disagree about which columns exist.
+ *
+ * `projectTracks` is the PROJECT's declared track list (`focusedReleaseView`'s
+ * `projectTracks`). In a multi-track project — more than one — the `track`
+ * column goes with the lanes: it shows when the rows declare ONE track or
+ * more, and a release whose rows declare none has no lanes, so it has no
+ * column either. Absent, or one track or none, the rows' own rule stands.
+ * `track` is always the last column.
  */
-export function roadmapTableColumns(entries) {
+export function roadmapTableColumns(entries, projectTracks) {
   const rows = Array.isArray(entries) ? entries : [];
   const columns = [...ROADMAP_BASE_COLUMNS];
   if (distinctLabels(rows, "wave").length > 1) columns.push("wave");
-  if (distinctLabels(rows, "track").length > 1) columns.push("track");
+  const rowTracks = distinctLabels(rows, "track").length;
+  const multiTrackProject = Array.isArray(projectTracks) && projectTracks.length > 1;
+  if (rowTracks > 1 || (multiTrackProject && rowTracks > 0)) columns.push("track");
   return columns;
 }
 
@@ -1629,6 +1638,7 @@ export function focusedReleaseView(gate, releases, entries) {
         mergedCount: 0,
         lanes: [],
         soloRows: [],
+        untrackedRows: [],
       };
       boxOf.set(wave, box);
       waves.push(box);
@@ -1653,6 +1663,17 @@ export function focusedReleaseView(gate, releases, entries) {
     // one fact must not disagree.
     if (wave !== null && entry?.status === "IN_PROGRESS") box.active = true;
   }
+
+  // The PROJECT's declared tracks, read over the WHOLE queue this view was
+  // handed — every release, status and lifecycle — through the same
+  // `distinctLabels` rule that mirrors `declaredTracks` (src/store.ts), the
+  // count `next` uses to ask for `--track`. A project declaring more than one
+  // is multi-track: every wave is laned by its own live members' tracks (one
+  // lane or more), and an untracked row is flagged, because in such a project
+  // it falls to Mainline. A project declaring one track or none keeps the
+  // per-wave rule and flags nothing (the implicit solo lane, DN §4).
+  const projectTracks = distinctLabels(rows, "track");
+  const multiTrack = projectTracks.length > 1;
 
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
   // membership it is a window on so the two cannot drift. `entries` stays the
@@ -1742,13 +1763,27 @@ export function focusedReleaseView(gate, releases, entries) {
     // nothing draws, so what it publishes is no lanes and `soloRows` entire —
     // the shape always describes what is actually drawn.
     const laneTracks = box.wave === null ? [] : distinctLabels(box.entries, "track");
-    const laned = laneTracks.length > 1 ? laneTracks : [];
+    //
+    // In a MULTI-TRACK project (`projectTracks` above) the chrome's floor
+    // drops to ONE track: a wave whose live members all sit on one track
+    // still draws that lane, so it never reads as Mainline's own work. A wave
+    // whose members declare no track still publishes no lanes.
+    const laneFloor = multiTrack ? 1 : 2;
+    const laned = laneTracks.length >= laneFloor ? laneTracks : [];
     const laneRows = new Map(laned.map((track) => [track, []]));
     box.soloRows = [];
     for (const entry of box.rows) {
       (laneRows.get(declaredLabel(entry, "track")) ?? box.soloRows).push(entry);
     }
     box.lanes = laned.map((track) => ({ track, rows: laneRows.get(track) }));
+    // The drawn rows that carry the `no track` marker: in a multi-track
+    // project, every drawn row declaring no track that is not merged, the
+    // loose group's included. A solo project flags none.
+    box.untrackedRows = multiTrack
+      ? box.rows.filter(
+          (entry) => declaredLabel(entry, "track") === undefined && !roadmapMerged(entry),
+        )
+      : [];
   }
 
   // CR-CRU-096 §S4/AC12b — `nextCr` is a VIEW-level fact, not a per-box one:
@@ -1797,6 +1832,7 @@ export function focusedReleaseView(gate, releases, entries) {
     packagesState:
       packages === undefined ? "absent" : packages.length === 0 ? "empty" : "listed",
     tracks: distinctLabels(members, "track"),
+    projectTracks,
   };
 }
 

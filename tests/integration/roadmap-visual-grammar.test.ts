@@ -318,6 +318,11 @@ const QUEUE: QueueFixture[] = [
     track: "1",
   },
   // ── 0.2.0, wave W2 — PENDING, plus AC27's second axis on two of them ────
+  //
+  // ONE declared track across the whole board, W2 included: a queue declaring
+  // two makes the project multi-track, and a multi-track project lanes every
+  // wave — a one-lane box is 59px wider than the UNLANED box every geometry
+  // reading on this board is measured against.
   {
     cr: "CR-V-PEND",
     title: "CR-V-PEND — nothing to report yet",
@@ -326,7 +331,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 13,
     release: "0.2.0",
-    track: "2",
+    track: "1",
   },
   {
     cr: "CR-V-SUP",
@@ -336,7 +341,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 14,
     release: "0.2.0",
-    track: "2",
+    track: "1",
     lifecycle: { state: "SUPERSEDED", by: "CR-V-LIVE", at: RETIRED_AT },
   },
   {
@@ -347,7 +352,7 @@ const QUEUE: QueueFixture[] = [
     status: "PENDING",
     seq: 15,
     release: "0.2.0",
-    track: "2",
+    track: "1",
     lifecycle: { state: "VOID", reason: "the surface it targeted was retired", at: RETIRED_AT },
   },
 ];
@@ -655,6 +660,56 @@ const LANED_QUEUE: QueueFixture[] = [
   })),
 ];
 
+// ── The project-level lane rule's two MEASUREMENT boards ──────────────────────────
+//
+// A project whose QUEUE declares more than one track lanes every wave, so a
+// wave on ONE track draws a one-lane box, and a wave whose members declare no
+// track draws an unlaned box whose untracked rows carry the `no track` marker
+// in place of their `deps` text. Two budgets at the 1130px surface: 360px for
+// a laned box (the 54px label column and the 5px gap on top of the unlaned
+// box) and the unlaned box's own ~300px.
+//
+// Both boards are `STACKED_DEPS_QUEUE`'s wave `5` — five scheduled rows each
+// declaring the four `BARE_DEPS`, so the zone's one `next` marker lands on a
+// four-dependency row — with the project made multi-track by the SHIPPED leg
+// alone: the focused wave's own track data is what differs between them.
+//
+// Every id is synthetic (`CR-B-*`, this file's abbreviating namespace).
+
+const fourDepRows = (): QueueFixture[] => [
+  ...mergedMembers("CR-B-2", "5", 4, 500),
+  ...scheduledMembers(
+    "CR-B-1",
+    "5",
+    5,
+    520,
+    Array.from({ length: 5 }, () => BARE_DEPS),
+  ),
+];
+
+/** The same rows with every declared track removed. */
+const withoutTrack = (entries: QueueFixture[]): QueueFixture[] =>
+  entries.map(({ track: _dropped, ...rest }) => rest);
+
+/** The one-lane board: the focused wave declares `MEASURED_TRACK` alone, and
+ *  the shipped leg declares the project's SECOND track. */
+const ONE_LANE_QUEUE: QueueFixture[] = [
+  { ...QUEUE[0]!, track: "2" },
+  QUEUE[1]!,
+  ...fourDepRows(),
+];
+
+/** The no-track board: the focused wave declares no track at all, and the
+ *  shipped leg declares the project's TWO tracks. */
+const NO_TRACK_WAVE_QUEUE: QueueFixture[] = [
+  { ...QUEUE[0]!, track: "1" },
+  { ...QUEUE[1]!, track: "2" },
+  ...withoutTrack(fourDepRows()),
+];
+
+/** The laned box's budget at the 1130px surface. */
+const LANED_WAVE_BUDGET = 360;
+
 // ── CR-CRU-103 §S1/AC3a — the board the DELIVERED CARD is measured on ──────
 //
 // A SHIPPED focus, because only a shipped release draws AC8's delivered
@@ -923,6 +978,10 @@ let stackedDepsFixtureUrl = "";
 // CR-CRU-085 §S2/AC5 — the laned board the lane grid's geometry is read off.
 let lanedZones = "";
 let lanedFixtureUrl = "";
+let oneLaneZones = "";
+let oneLaneFixtureUrl = "";
+let noTrackWaveZones = "";
+let noTrackWaveFixtureUrl = "";
 // CR-CRU-103 C1 — §S1's delivered-card board.
 let deliveredZones = "";
 let deliveredFixtureUrl = "";
@@ -1008,6 +1067,11 @@ beforeAll(async () => {
     queue: STACKED_DEPS_QUEUE,
   });
   lanedZones = await captureZones({ proposals: LANED_PROPOSALS, queue: LANED_QUEUE });
+  oneLaneZones = await captureZones({ proposals: BARE_DEPS_PROPOSALS, queue: ONE_LANE_QUEUE });
+  noTrackWaveZones = await captureZones({
+    proposals: BARE_DEPS_PROPOSALS,
+    queue: NO_TRACK_WAVE_QUEUE,
+  });
   // No proposal at all, so `releaseStripFocusIndex` falls through to the last
   // gate — the newest SHIPPED tag. That is the only way to reach §S7's
   // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
@@ -1135,6 +1199,18 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // The project-level lane rule's two measurement boards, at the same
+      // 1130px surface.
+      if (pathname === "/fixture-one-lane") {
+        return new Response(fixtureDocument(oneLaneZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-no-track-wave") {
+        return new Response(fixtureDocument(noTrackWaveZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-height-loose") {
         return new Response(fixtureDocument(heightLooseZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1196,6 +1272,8 @@ beforeAll(async () => {
   bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
   stackedDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-stacked-deps`;
   lanedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-laned`;
+  oneLaneFixtureUrl = `http://127.0.0.1:${server.port}/fixture-one-lane`;
+  noTrackWaveFixtureUrl = `http://127.0.0.1:${server.port}/fixture-no-track-wave`;
   deliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-delivered`;
 
   browser = await chromium.launch();
@@ -6359,4 +6437,82 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       }
     }
   }, 180_000);
+});
+
+// ── The project-level lane rule's width budgets, measured ─────────────────────────
+//
+// At the 1130px surface a one-lane box holds 360px and an unlaned box ~300px.
+// Each board is first proven to BE the case its budget is stated against — a
+// laned box with `next` on a four-dependency row, an unlaned box whose
+// untracked `next` row carries the marker — and every assertion message
+// carries the measured width.
+
+describe("a multi-track project's wave boxes hold their width budgets at the 1130px surface", () => {
+  test("a one-lane box whose row carries `next` and four declared dependencies measures at most 360px", async () => {
+    await openWide(oneLaneFixtureUrl);
+    const box = one(await boxesOf('[data-testid="roadmap-wave"]'), "wave box");
+    const zone = one(await boxesOf('[data-zone="2"]'), "zone 2");
+    expect(round1(zone.width)).toBe(SURFACE_W);
+    const width = `${round1(box.width)}px`;
+
+    // The board IS laned: one lane, labelled with the wave's one track.
+    const lanes = await boxesOf('[data-testid="roadmap-wave"] [data-testid="roadmap-wave-lane"]');
+    expect(
+      lanes.length,
+      `the one-lane board's wave box (measured ${width}) draws ${lanes.length} lanes, so it is ` +
+        `not the laned box the ${LANED_WAVE_BUDGET}px budget is stated against`,
+    ).toBe(1);
+    const labels = await boxesOf(
+      '[data-testid="roadmap-wave"] [data-testid="roadmap-wave-lane-label"]',
+    );
+    expect(labels.map((label) => label.text)).toEqual([MEASURED_TRACK]);
+
+    // …and its `next` row carries the four declared dependencies.
+    const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
+    const marked = slots.filter((slot) => cappedBareShape(BARE_DEPS.length, true).test(slot.text));
+    expect(
+      marked.length,
+      `no row of the one-lane box (measured ${width}) reads \`next\` with ${BARE_DEPS.length} ` +
+        `declared dependencies — its annotations read ${JSON.stringify(slots.map((s) => s.text))}`,
+    ).toBe(1);
+
+    expect(
+      box.width,
+      `the one-lane wave box measures ${width} against the ${LANED_WAVE_BUDGET}px laned budget, ` +
+        `with its widest annotation reading ${JSON.stringify(marked[0]?.text)}`,
+    ).toBeLessThanOrEqual(LANED_WAVE_BUDGET);
+  });
+
+  test("an unlaned box of a wave with no declared track, whose untracked row carries `next` and the marker, measures at most 300px", async () => {
+    await openWide(noTrackWaveFixtureUrl);
+    const box = one(await boxesOf('[data-testid="roadmap-wave"]'), "wave box");
+    const zone = one(await boxesOf('[data-zone="2"]'), "zone 2");
+    expect(round1(zone.width)).toBe(SURFACE_W);
+    const width = `${round1(box.width)}px`;
+
+    // The board is NOT laned…
+    const lanes = await boxesOf('[data-testid="roadmap-wave"] [data-testid="roadmap-wave-lane"]');
+    expect(
+      lanes.length,
+      `the no-track board's wave box (measured ${width}) draws ${lanes.length} lanes`,
+    ).toBe(0);
+
+    // …and its `next` row is untracked and carries the marker.
+    const nextMarker = await boxesOf(
+      '[data-testid="roadmap-node"]:has(.app-flow-node-next) [data-testid="roadmap-node-no-track"]',
+    );
+    expect(
+      nextMarker.length,
+      `the no-track board's \`next\` row carries ${nextMarker.length} \`no track\` markers in a ` +
+        `wave box measured at ${width}, so it is not the case the ~${BUDGET.wave}px budget is ` +
+        `stated against`,
+    ).toBe(1);
+    expect(nextMarker[0]?.text).toBe("no track");
+
+    expect(
+      box.width,
+      `the no-track wave box measures ${width} against the ~${BUDGET.wave}px unlaned budget, ` +
+        `its \`next\` row carrying the \`no track\` marker`,
+    ).toBeLessThanOrEqual(BUDGET.wave);
+  });
 });

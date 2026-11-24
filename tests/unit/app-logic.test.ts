@@ -956,4 +956,124 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
       "status",
     ]);
   });
+
+  // THE PROJECT-LEVEL ARM. The roadmap decides whether a project is
+  // multi-track from the WHOLE queue it was read from, and the view publishes
+  // that list as `projectTracks` — the field this arm names for GREEN. It must
+  // be the published rule over the same rows: every release, every status,
+  // every lifecycle. Compared as a SET for the reason above (sorted on the
+  // server, first-appearance in the browser).
+  const ProjectBrowser = AppLogic as unknown as {
+    focusedReleaseView: (
+      gate: unknown,
+      releases: unknown,
+      entries: unknown,
+    ) => { tracks: string[]; projectTracks?: string[] };
+  };
+
+  const projectTrackSet = (rows: Array<Record<string, unknown>>): string[] | undefined => {
+    const published = ProjectBrowser.focusedReleaseView(GATE, [], rows).projectTracks;
+    return published === undefined ? undefined : [...published].sort();
+  };
+
+  test("the view's project track list classifies every case exactly as the published rule does", () => {
+    const measured = TRACK_FIXTURE.map((one) => ({
+      case: one.name,
+      server: serverTracks([one]),
+      project: projectTrackSet(rowsOf([one])),
+    }));
+
+    expect(measured).toEqual(
+      TRACK_FIXTURE.map((one) => ({
+        case: one.name,
+        server: expected(one),
+        project: expected(one),
+      })),
+    );
+  });
+
+  test("over a queue spanning releases, statuses and lifecycles, the view's project track list equals the published rule over the same rows", () => {
+    const at = 1787200000000;
+    const beyond: Array<Record<string, unknown>> = [
+      // Another release's member: in the project, outside the focus.
+      { cr: "CR-AC7-A", title: "another release", wave: "9", dependsOn: [], status: "PENDING", seq: 1, release: "0.3.0", track: "track-5" },
+      // A merged member of the focus.
+      { cr: "CR-AC7-B", title: "merged", wave: "5", dependsOn: [], status: "COMPLETED", seq: 200, release: RELEASE, track: "track-6" },
+      // Two dead members of the focus.
+      { cr: "CR-AC7-C", title: "void", wave: "5", dependsOn: [], status: "PENDING", seq: 210, release: RELEASE, track: "track-7", lifecycle: { state: "VOID", reason: "retired", at } },
+      { cr: "CR-AC7-D", title: "superseded", wave: "5", dependsOn: [], status: "PENDING", seq: 220, release: RELEASE, track: "track-8", lifecycle: { state: "SUPERSEDED", by: "CR-AC7-B", at } },
+    ];
+    const rows = [...beyond, ...rowsOf(TRACK_FIXTURE)];
+    const server = declaredTracks(rows as unknown as ReadonlyArray<{ track?: string | null }>);
+
+    // Non-vacuity: the published rule counts every one of those rows.
+    expect(server).toEqual(["2", "track-2", "track-5", "track-6", "track-7", "track-8"]);
+
+    expect(projectTrackSet(rows)).toEqual(server);
+    // …while the release-level list keeps its own scope: the other release's
+    // track is not in it.
+    expect([...ProjectBrowser.focusedReleaseView(GATE, [], rows).tracks].sort()).toEqual([
+      "2",
+      "track-2",
+      "track-6",
+      "track-7",
+      "track-8",
+    ]);
+  });
+});
+
+describe("roadmapTableColumns — the project's tracks decide the `track` column with the rows, in one call", () => {
+  const BASE = ["cr", "title", "deps", "status"];
+  const row = (cr: string, wave: string, track?: string): Record<string, unknown> => ({
+    cr,
+    title: cr,
+    wave,
+    dependsOn: [],
+    status: "PENDING",
+    ...(track === undefined ? {} : { track }),
+  });
+
+  /** The focused rows: one declared track, two declared tracks, none. */
+  const ONE_TRACK_ROWS = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "1", "track-1")];
+  const TWO_TRACK_ROWS = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "1", "track-2")];
+  const NO_TRACK_ROWS = [row("CR-C-1", "1"), row("CR-C-2", "1")];
+
+  const MULTI = ["track-1", "track-2"];
+
+  test("in a multi-track project, rows declaring one track or more show the column, last", () => {
+    expect(AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, MULTI)).toEqual([...BASE, "track"]);
+    expect(AppLogic.roadmapTableColumns(TWO_TRACK_ROWS, MULTI)).toEqual([...BASE, "track"]);
+    // Across two waves the column still closes the list, after `wave`.
+    const twoWaves = [row("CR-C-1", "1", "track-1"), row("CR-C-2", "2")];
+    expect(AppLogic.roadmapTableColumns(twoWaves, MULTI)).toEqual([...BASE, "wave", "track"]);
+  });
+
+  test("in a multi-track project, rows declaring no track show no column", () => {
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, MULTI)).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns([], MULTI)).toEqual(BASE);
+  });
+
+  test("a project declaring one track or none shows no column", () => {
+    expect(AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, ["track-1"])).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, ["track-1"])).toEqual(BASE);
+    expect(AppLogic.roadmapTableColumns(NO_TRACK_ROWS, [])).toEqual(BASE);
+  });
+
+  test("with no project list, the rows' own rule stands: the column only across two tracks", () => {
+    for (const project of [undefined, null] as const) {
+      expect({ project, one: AppLogic.roadmapTableColumns(ONE_TRACK_ROWS, project) }).toEqual({
+        project,
+        one: BASE,
+      });
+      expect({ project, none: AppLogic.roadmapTableColumns(NO_TRACK_ROWS, project) }).toEqual({
+        project,
+        none: BASE,
+      });
+      expect({ project, two: AppLogic.roadmapTableColumns(TWO_TRACK_ROWS, project) }).toEqual({
+        project,
+        two: [...BASE, "track"],
+      });
+    }
+    expect(AppLogic.roadmapTableColumns(TWO_TRACK_ROWS)).toEqual([...BASE, "track"]);
+  });
 });

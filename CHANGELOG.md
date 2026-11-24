@@ -36,6 +36,13 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Changed
 
+- **A multi-track project's waves always show their track.** A project whose queue declares more than one
+  track, in any release, status or lifecycle, now lanes every wave on the roadmap by its own CRs' tracks. A
+  wave on one track draws that one lane, and its header reads `· 1 track`. A CR that declares no track in such a
+  project carries a `no track` marker in place of its `deps` annotation, because it falls to Mainline until it
+  is given one. The table's `track` column shows in such a project too, for any release that declares a track.
+  A project declaring one track or none is unchanged.
+
 - **A rust tier verb runs the tests its kind names.** The rust client's `unit` now runs the lib, bin and
   proc-macro tests (`-E "kind(lib) | kind(bin) | kind(proc-macro)"`), and `integration` only the `tests/`
   targets (`-E "kind(test)"`), instead of `--lib` and `--tests`. A declared `[profile.unit]` or
