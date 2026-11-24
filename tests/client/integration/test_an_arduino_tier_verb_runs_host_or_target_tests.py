@@ -443,18 +443,21 @@ class ATierWithNoPlaceAndNoDeclarationIsRefusedTest(_TierProject):
 
     def test_e2e_with_no_hil_makefile_is_refused_naming_both_ways_out(self):
         result = self.drive("e2e", agent="ard-tier-e2e-undeclared")
-        self.assertUndeclared(result, "tests/hil/Makefile", "junit-e2e")
+        self.assertUndeclared(result, "tests/hil/Makefile", "junit-e2e",
+                              "tests/native/Makefile")
 
     def test_e2e_without_an_agent_with_no_hil_makefile_is_refused(self):
-        self.assertUndeclared(self.drive("e2e"), "tests/hil/Makefile", "junit-e2e")
+        self.assertUndeclared(self.drive("e2e"), "tests/hil/Makefile", "junit-e2e",
+                              "tests/native/Makefile")
 
     def test_integration_with_no_sim_makefile_is_refused_naming_both_ways_out(self):
         result = self.drive("integration", agent="ard-tier-integration-undeclared")
-        self.assertUndeclared(result, "tests/sim/Makefile", "junit-integration")
+        self.assertUndeclared(result, "tests/sim/Makefile", "junit-integration",
+                              "tests/native/Makefile")
 
     def test_integration_without_an_agent_with_no_sim_makefile_is_refused(self):
         self.assertUndeclared(self.drive("integration"), "tests/sim/Makefile",
-                              "junit-integration")
+                              "junit-integration", "tests/native/Makefile")
 
     def test_module_with_no_declaration_is_refused(self):
         result = self.drive("module", agent="ard-tier-module-undeclared")
