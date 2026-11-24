@@ -68,7 +68,8 @@ mirror of `declaredTracks` pinned by CR-CRU-108's parity test.
 
 **The table column.** Zone 3's `track` column follows the same rule (ruling Q3). It shows in a multi-track project
 even when the focused release's members declare one track, so CR-CRU-085's "lanes and column appear together" still
-holds.
+holds. A focused release whose members declare no track has no lanes, so it shows no column either (user ruling,
+2026-11-25).
 
 ### S2: a solo project is unchanged
 
@@ -193,6 +194,7 @@ This proves the path `refetchRoadmap` → `RoadmapPanel` → `focusedReleaseView
 **AC11 (S1, Q3).** Zone 3's `track` column:
 
 - In MULTI with a single-track focused release, the column shows.
+- In MULTI with a focused release that declares no track, it does not show.
 - Under ONE and NONE, it does not show.
 
 **AC12 (reviewed, not tested).** The docs are amended:
