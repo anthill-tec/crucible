@@ -574,6 +574,48 @@ and files its compile record as before.
 gate's maven leg is that one run with no profile, so its `suites[]` row for a declared profile says the profile was
 not activated.
 
+## Arduino tier verbs
+
+The arduino client's tier verbs run a firmware project's tests by where they run. Each runs `make junit` in its own
+place:
+
+| Verb | Place | Tests |
+|---|---|---|
+| `unit` | `tests/native` | the native host tests |
+| `integration` | `tests/sim` | the tests under a simulator |
+| `e2e` | `tests/hil` | the tests on the board |
+| `module`, `bdd` | none | a declared target only, else `tier-run-undeclared` |
+
+**A declared target wins.** A declaration is a `junit-<tier>:` rule in a Makefile. It runs in place of `make junit`
+and is filed under the verb's tier.
+
+- **Without `--dir`:** the client reads `tests/native/Makefile`. When `junit-<tier>` is declared there, it runs
+  there. Otherwise the verb runs `make junit` in its place.
+- **With `--dir`:** only that directory's Makefile is read. `junit-<tier>` runs if it is declared there, otherwise
+  `make junit` runs there.
+- `unit --tests` and `unit --name` reach `make` as `TESTS` and `TEST_NAME`, under a declared `junit-unit` as well.
+  `TESTS` and `TEST_NAME` set in the shell never reach `make` on any verb.
+
+**Nothing to run is refused.** `integration` with no `junit-integration` and no `tests/sim/Makefile`, `e2e` with no
+`junit-e2e` and no `tests/hil/Makefile`, and `module` or `bdd` with no declaration answer `ok: false` with code
+`tier-run-undeclared` and exit 1. Nothing runs and nothing reaches the board. The help names both ways out: declare
+`junit-<tier>` in `tests/native/Makefile`, or add the place's Makefile. `unit` always has its place.
+
+**A run in which no case ran is refused.** On `unit`, `integration` and `e2e`, a run whose reports hold no case, or
+only skipped cases, answers `ok: false` with code `tier-selection-empty` and exit 1, with or without `--agent`. No
+board or simulator may have answered. Nothing is filed; with `--agent`, the opened run is aborted and its identity
+closed. A narrowed `unit` run that matched nothing is refused the same way. A run with at least one case run is filed,
+whatever else was skipped. `test` and `regression` still file a run that found no case.
+
+**`regression` and the gate are unchanged.** `regression` runs `make junit` once under `--dir` (default
+`tests/native`). `pre-merge-gate` composes the targets declared in the Makefile under its own `--dir`, as before: a
+declared `junit-integration` joins it, and a declared `junit-e2e` is excluded. A place found only by convention
+(`tests/sim`, `tests/hil`) never joins the gate.
+
+**The stream key.** A declared target's `[targets.*]` key in `crucible.toml` is `<dir>/junit-<tier>`, the directory
+it runs in joined by `/` to the target, as `tests/native/junit-integration`. A run in a place is keyed by that place,
+as `tests/sim/junit`.
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server
