@@ -279,10 +279,14 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  declared `track` labels (`roadmapTableColumns`' rule, AC7), so a lane
    *  whose every member is merged or beyond the row cap is still published,
    *  with no `rows`; a lane's `rows` are a subset of the box's own `rows`, in
-   *  the same published order. EMPTY unless more than one track is reported
-   *  (AC2/AC4) — one track, or none, draws no lane chrome at all — and always
-   *  EMPTY for the `wave: null` loose group, which has no box to lane and
-   *  draws its rows flat (AC18a). */
+   *  the same published order. In a MULTI-TRACK project (`projectTracks`
+   *  holds more than one track) every wave publishes one lane per track its
+   *  live members declare — ONE lane or more — so a single-track wave still
+   *  names its track. Otherwise it is EMPTY unless the wave itself reports
+   *  more than one track — one track, or none, draws no lane chrome. It is
+   *  EMPTY for a wave whose members declare no track, and always EMPTY for
+   *  the `wave: null` loose group, which has no box to lane and draws its
+   *  rows flat (AC18a). */
   lanes: FocusedReleaseWaveLane<Entry>[];
   /** CR-CRU-085 §S3/AC9 — the rows drawn in the wave BODY, OUTSIDE the lane
    *  grid: the IMPLICIT SOLO LANE (`DN-model-b-language.md`, LOCKED:
@@ -293,6 +297,11 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  drawn nowhere. With no lanes published this is ALL of `rows`, which is
    *  the flat list CR-CRU-078 draws. */
   soloRows: Entry[];
+  /** The drawn rows that carry the `no track` marker: in a multi-track
+   *  project, each of `rows` that declares no track and is not merged, the
+   *  loose group's included, in the published order. ALWAYS EMPTY in a
+   *  project declaring one track or none (the implicit solo lane). */
+  untrackedRows: Entry[];
 }
 
 /** CR-CRU-085 §S2 — ONE track's swimlane inside a wave box: the declared
@@ -326,7 +335,13 @@ export interface FocusedReleaseView<Entry = unknown> {
   packages: ReleasePackage[] | undefined;
   /** `empty` (delivered none) and `absent` (pre-CR-CRU-084) stay distinct. */
   packagesState: "listed" | "empty" | "absent";
+  /** The distinct declared tracks of this release's members. */
   tracks: string[];
+  /** The PROJECT's distinct declared tracks, read over the whole queue the
+   *  view was given — every release, status and lifecycle — by the same rule
+   *  as `declaredTracks` (src/store.ts), in first-appearance order. More than
+   *  one makes the project multi-track. */
+  projectTracks: string[];
 }
 
 /** §S1 AC5 — the browser's state-based mirror of `isDeadCr` in
