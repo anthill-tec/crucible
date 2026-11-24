@@ -2361,6 +2361,9 @@ TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 #: filed. One code for every client that checks its selection.
 TIER_SELECTION_EMPTY_CODE = "tier-selection-empty"
 
+#: The `run:` block of a run that was not filed: no figures.
+UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
+
 
 def refuse_tier_run(emit_fn, verb, context, refusal, code=None, warnings=()):
     """A tier run refused before anything was filed: ONE `ok: false` envelope
@@ -2368,9 +2371,7 @@ def refuse_tier_run(emit_fn, verb, context, refusal, code=None, warnings=()):
     and its `code` when it has one (`TIER_SELECTION_EMPTY_CODE`, say), with
     the caller's `warnings`. Returns the exit, 1."""
     print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
-    fields = {"run": dict.fromkeys(("passed", "failed", "pending", "total",
-                                    "files")),
-              "error": refusal}
+    fields = {"run": dict(UNFILED_RUN), "error": refusal}
     if code:
         fields["code"] = code
     fields["help"] = [f"fix what the error names, then re-run {verb}", "status"]

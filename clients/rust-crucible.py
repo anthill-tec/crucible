@@ -699,16 +699,12 @@ def _nextest_refusal(args, verb, project_dir, profile, coverage=False, gate=Fals
     warnings = (_axi().whole_suite_unreported_warnings(
         _STACK, {"ok": False, "error": refusal}) if gate else [])
     _emit_axi(verb, False,
-              {"run": _UNFILED_RUN, "error": refusal,
+              {"run": _axi().UNFILED_RUN, "error": refusal,
                "help": [f"fix what the error names, then re-run {verb} "
                         f"--agent <agentId>", "status"]},
               _axi_context(project_dir, agent_id=args.agent), warnings,
               f"{verb}: ok=False — {refusal}")
     return 1
-
-
-#: The `run:` block of a run that was not filed: no figures.
-_UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
 
 
 def _health_unreadable(health):
@@ -992,7 +988,7 @@ def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
         agent_id=agent, tier=tier, context=context, release=release,
         warnings=warnings,
         emit=lambda ok, fields, found, line: _emit_axi(
-            verb, ok, {"run": _UNFILED_RUN, **fields},
+            verb, ok, {"run": _axi().UNFILED_RUN, **fields},
             _axi_context(project_dir, agent_id=agent), found, line),
         emit_ingest=lambda resp, help_steps, found, ok: envelope(
             resp, help_steps, found, ok, _axi().verb_exit(runner_exit, resp)),
@@ -1014,7 +1010,7 @@ def _list_build_failure(verb, project_dir, agent, listed, run_id, release,
     board did not open), and ONE `ok: false` envelope says so."""
     print(f"[crucible] cargo nextest list exit={listed.returncode} — the tests "
           f"did not build; no run follows", file=sys.stderr)
-    fields = {"run": _UNFILED_RUN,
+    fields = {"run": _axi().UNFILED_RUN,
               "help": _axi().no_report_help(
                   verb, _STREAM_FILE,
                   remedy="fix the build errors `cargo nextest list` reported")}
