@@ -1827,12 +1827,11 @@ def _add_native_coverage_arg(p):
 
 
 # CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
-# by every refusal the shared registrar builds here. This client's ONE
-# toolchain split is the native host build (`make junit` under --dir), which
-# `unit` and `regression` already run; every other cell is a DECLARED cell, and
-# the surface that can carry it is that native Makefile's own target list. Two
-# directories behind one `--dir` flag is not a split this client can READ, so
-# `integration` is declared here rather than invented.
+# by every refusal the shared registrar builds here. This client's tiers run
+# by PLACE: `unit` in tests/native, `integration` in tests/sim and `e2e` in
+# tests/hil (`_TIER_PLACES`), `regression` the native suite under --dir;
+# `module` and `bdd` are DECLARED cells, and the surface that carries a
+# declaration is the native Makefile's own target list.
 def _add_declared_tier_args(p):
     """§S6 ruling 4 — a DECLARED cell's flag surface: the one its test-running
     siblings (`unit`/`regression`) already take, so the instruction a refusal
@@ -1913,9 +1912,13 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 # so the make contract keeps one variable per line and its Makefile snippet
 # keeps its shape.
 _CLI_DESCRIPTION = (
-    "Arduino-firmware Crucible stack script: runs a project's native host tests\n"
-    "through its own Makefile (`make junit`) and ingests the JUnit result to\n"
-    "Crucible; `check` compiles the sketch with arduino-cli.\n"
+    "Arduino-firmware Crucible stack script: runs a project's tests through its\n"
+    "own Makefile (`make junit`) and ingests the JUnit result to Crucible;\n"
+    "`check` compiles the sketch with arduino-cli.\n"
+    "Each tier verb runs in its own place: `unit` in tests/native (the native\n"
+    "host tests), `integration` in tests/sim (under a simulator), `e2e` in\n"
+    "tests/hil (on the board). A `junit-<tier>` target declared in\n"
+    "tests/native/Makefile runs instead, and --dir names another directory.\n"
     "Run `<verb> --help` for a verb's own flags.\n"
     "\n"
     "The make contract: the variables a native run hands the Makefile under --dir.\n"
@@ -2007,9 +2010,9 @@ def main():
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
     #
-    # `unit` and `regression` migrate onto it and keep their handlers, their
-    # flags and their behaviour; the four cells this stack declares no target
-    # for answer their help and refuse. The help each verb prints says what it
+    # `unit`, `integration` and `e2e` run in their own place; `regression`
+    # keeps its handler, flags and behaviour; `module` and `bdd` run a
+    # declared target or refuse. The help each verb prints says what it
     # RUNS and no longer what tier the run claims — this client sends no tier
     # yet, and help that says otherwise contradicts the board. `common` is the
     # parent for the reason the other registrars take it: these verbs write,
