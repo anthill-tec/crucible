@@ -1911,6 +1911,15 @@ button.app-run-coverage:hover { color: var(--ink); }
   white-space: nowrap;
 }
 .app-flow-node-next { font-weight: 700; }
+/* The `no track` marker on an untracked row of a multi-track project: a row
+   warning in the shape of `roadmap-order-warning` — plain words, with the
+   reason in its `title` — set in the annotation's quiet mono face beside it.
+   It is not a control, so it takes no `cursor` of its own. */
+.app-flow-node-no-track {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
 
 /* ── AC22: colour says WHERE IT STANDS ─────────────────────────────────────
    One hue per state, every one of them a declared token, and the same status
