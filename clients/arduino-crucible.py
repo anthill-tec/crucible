@@ -621,7 +621,7 @@ def _start_run(pd, agent_id, tier=None, context=None, release=None, framework=No
 
 
 def _run_native_tests(args, verb, tier, want_coverage, target="junit",
-                      name_unfiled=False):
+                      name_unfiled=False, refuse_empty=False):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
     (`make <target>`) → their TEST-*.xml sent to /api/v2/runs, for the board
     to decode, under the given `tier`; a
@@ -642,6 +642,10 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit",
     `name_unfiled` is set when this run IS the gate's whole answer (a gate
     that composes no declared suites): its envelope then names the run
     unreported when it was not filed. A composing gate names it itself.
+
+    `refuse_empty` is set by the place-run tier verbs (`unit`, `integration`,
+    `e2e`): a run whose reports hold no case that ran is refused
+    (`tier-selection-empty`) rather than filed.
 
     The run's `[targets.*]` declaration is checked next, before any board
     call (`_check_stream_declaration`)."""
@@ -674,7 +678,8 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit",
                 context=_run_context(), release=getattr(args, "release", None))
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       preflight_warnings, target, identity,
-                                      name_unfiled=name_unfiled)
+                                      name_unfiled=name_unfiled,
+                                      refuse_empty=refuse_empty)
 
 
 def _run_reports_dir(args, pd):
@@ -903,7 +908,7 @@ def _ignored_narrowing_warnings(args, cases, native_dir):
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                            preflight_warnings=(), target="junit", identity=None,
-                           *, name_unfiled=False):
+                           *, name_unfiled=False, refuse_empty=False):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
     finding, decided BEFORE the runner spawned; it rides every envelope this
     body can emit, ahead of whatever the run itself discovers.
@@ -1014,6 +1019,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         preflight_warnings += _ignored_narrowing_warnings(
             args, _axi().junit_case_sources(reports), native_dir)
     total = _axi().junit_testcase_count(reports)
+    # A place-run tier verb whose reports hold no case that ran (none, or only
+    # skipped ones) is refused before the ran-nothing check, narrowed or not.
+    # A report that could not be counted is never an empty run.
+    if refuse_empty and _ran_no_case(reports, total):
+        return _refuse_no_case_run(verb, pd, agent_id, run_id, preflight_warnings)
     # A narrowed run whose reports hold zero cases ran nothing whatever
     # `make`'s exit: Unity with a `-f` that matches nothing exits 0. So does a
     # narrowed declared run whose stream the board holds no `test-end` of.
@@ -1028,8 +1038,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # coverage. A coverage run that left none is filed with no coverage, and
     # says so.
     coverage_paths = []
+    lcov = os.path.join(_coverage_dir(native_dir, own_dir), "lcov.info")
     if want_coverage:
-        lcov = os.path.join(_coverage_dir(native_dir, own_dir), "lcov.info")
         if os.path.exists(lcov):
             coverage_paths = [lcov]
         else:
@@ -1119,10 +1129,117 @@ def cmd_test(args):
     return _run_native_tests(args, "test", None, False)
 
 
+def _ran_no_case(reports, total):
+    """Whether a run's `reports` (holding `total` cases) hold no case that
+    ran: none, or only skipped ones. An uncounted report (`total` None) and
+    a run with no report are never this shape."""
+    if not reports or total is None:
+        return False
+    return total == 0 or _axi().junit_non_skipped_count(reports) == 0
+
+
+def _refuse_no_case_run(verb, pd, agent_id, run_id, warnings):
+    """A place-run tier run in which no case ran: the run this verb opened (if
+    any) aborted, and ONE `ok: false` envelope carrying
+    `tier-selection-empty`. Nothing is filed. Returns the exit, 1."""
+    closing = []
+    if run_id:
+        closing = [_axi().abort_run(_post, _project_key(pd), agent_id, run_id,
+                                    f"the {verb} run ran no case")]
+    refusal = (f"no case ran in the `{verb}` run: its reports hold no case, or "
+               f"only skipped ones, so no board or simulator may have answered; "
+               f"nothing was filed \u2014 check the rig answers, or widen the "
+               f"selection")
+    return _axi().refuse_tier_run(
+        _emit_axi, verb, _axi_context(pd, agent_id=agent_id), refusal,
+        code=_axi().TIER_SELECTION_EMPTY_CODE, warnings=list(warnings) + closing)
+
+
+# Where each place-run tier verb runs `make junit` when no `junit-<tier>` is
+# declared: the native host tests, the tests under a simulator, the tests on
+# the board.
+_NATIVE_PLACE = "tests/native"
+_TIER_PLACES = {"unit": _NATIVE_PLACE, "integration": "tests/sim",
+                "e2e": "tests/hil"}
+
+
+def _resolve_tier_place(args, tier):
+    """`(dir, target)` a place-run tier verb runs, or None when neither is
+    found. With `--dir`, only that directory's Makefile is read: its
+    `junit-<tier>` when declared, else `make junit` there. Without it,
+    `junit-<tier>` declared in `tests/native/Makefile` runs there, else
+    `make junit` runs in the tier's place: always for `unit` (the native host
+    tests), and for `integration`/`e2e` only when the place has a Makefile."""
+    pd = _project_dir(args)
+    declared = _axi().declared_target_name(_TIER_DECLARATION_SURFACE, tier)
+    given = getattr(args, "dir", None)
+    if given:
+        sub = given.replace("\\", "/")
+        return sub, (declared if _makefile_declares(pd, sub, declared) else "junit")
+    if _makefile_declares(pd, _NATIVE_PLACE, declared):
+        return _NATIVE_PLACE, declared
+    place = _TIER_PLACES[tier]
+    if tier == "unit" or _makefile_declares(pd, place, "junit") is not None:
+        return place, "junit"
+    return None
+
+
+def _runnable_tiers(args):
+    """The tier verbs that run on this project: `unit` and `regression`,
+    `integration`/`e2e` when their place or declaration is found, and
+    `module`/`bdd` when declared under `tests/native`."""
+    pd = _project_dir(args)
+    runnable = []
+    for tier in _axi().TIER_MEANINGS:
+        declared = _axi().declared_target_name(_TIER_DECLARATION_SURFACE, tier)
+        if (tier in ("unit", "regression")
+                or _makefile_declares(pd, _NATIVE_PLACE, declared)
+                or (tier in _TIER_PLACES
+                    and _makefile_declares(pd, _TIER_PLACES[tier], "junit")
+                    is not None)):
+            runnable.append(tier)
+    return runnable
+
+
+def _run_tier_place(args, tier):
+    """The place-run tier verbs' one body: resolve the place and target
+    (`_resolve_tier_place`), run them under the verb's tier, and refuse a run
+    in which no case ran. Neither found is `tier-run-undeclared`, its help
+    naming the place's Makefile and the `junit-<tier>` declaration."""
+    resolved = _resolve_tier_place(args, tier)
+    if resolved is None:
+        refusal = _axi().TierRunUndeclared(
+            tier, _runnable_tiers(args),
+            _axi().declared_tier_surface_line(_TIER_DECLARATION_SURFACE, tier))
+        refusal.help.insert(
+            1, f"or add {_TIER_PLACES[tier]}/Makefile with a `junit` target, "
+               f"the {tier} tests' own place, then re-run `{tier}`; or name "
+               f"another directory with --dir")
+        raise refusal
+    # The run's stream key is `<dir>/<target>`, so the resolved place rides
+    # as the run's --dir.
+    args.dir, target = resolved
+    return _run_native_tests(args, tier, tier, False, target=target,
+                             refuse_empty=True)
+
+
 def cmd_unit(args):
-    """§S3 fleet-uniform `unit` verb — native host tests (`make junit`) → tier
-    `unit`. The RED/GREEN workhorse; identical toolchain to `test`."""
-    return _run_native_tests(args, "unit", "unit", False)
+    """§S3 fleet-uniform `unit` verb — the native host tests (`make junit` in
+    tests/native, or a declared `junit-unit`) → tier `unit`. The RED/GREEN
+    workhorse; a run in which no case ran is refused."""
+    return _run_tier_place(args, "unit")
+
+
+def cmd_integration(args):
+    """`integration` — the tests under a simulator (`make junit` in
+    tests/sim, or a declared `junit-integration`) → tier `integration`."""
+    return _run_tier_place(args, "integration")
+
+
+def cmd_e2e(args):
+    """`e2e` — the tests on the board (`make junit` in tests/hil, or a
+    declared `junit-e2e`) → tier `e2e`."""
+    return _run_tier_place(args, "e2e")
 
 
 def cmd_regression(args):
@@ -1680,6 +1797,31 @@ def _add_native_dir_arg(p):
     p.add_argument("--dir", default="tests/native", help=_DIR_HELP)
 
 
+_PLACE_DIR_HELP = ("run in this test-target subdir under the project instead of "
+                   "the tier's place; only its Makefile is read: its "
+                   "`junit-<tier>` runs when declared, else `make junit`")
+
+
+def _add_place_dir_arg(p):
+    """A place-run tier verb's `--dir`: no default, so a run that names no
+    directory is resolved to the tier's place (`_resolve_tier_place`)."""
+    p.add_argument("--dir", default=None, help=_PLACE_DIR_HELP)
+
+
+def _place_tier_verb(func, tier, *extra_adders):
+    """The `TierVerb` of a place-run tier: its help names the place, `--dir`
+    and the `junit-<tier>` override."""
+    place = _TIER_PLACES[tier]
+    return _axi().TierVerb(
+        func,
+        f"Runs `make junit` in {place} -> /api/v2/runs; a `junit-{tier}` "
+        f"target declared in tests/native/Makefile runs instead, and --dir "
+        f"names another directory, whose Makefile alone is read. A run in "
+        f"which no case ran is refused (tier-selection-empty).",
+        (_add_place_dir_arg, _add_gate_cycle_arg, _add_run_release_arg,
+         _add_reports_arg, _add_log_arg, *extra_adders))
+
+
 def _add_native_coverage_arg(p):
     _axi().add_regression_coverage_arg(p, "lcov")
 
@@ -1728,15 +1870,20 @@ def _read_declared_make_target(args, target):
     Makefile under `--dir`. A make RULE is a line beginning with the target
     name and a colon, so a target merely mentioned in a recipe or a comment is
     not a declaration."""
-    pd = _project_dir(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
-    makefile = os.path.join(pd, *sub.split("/"), "Makefile")
+    return target if _makefile_declares(_project_dir(args), sub, target) else None
+
+
+def _makefile_declares(pd, sub, target):
+    """Whether the Makefile in `sub` (relative to `pd`) declares a `target`
+    rule: None when there is no Makefile there to read."""
+    makefile = os.path.join(pd, *sub.strip("/").split("/"), "Makefile")
     try:
         with open(makefile, encoding="utf-8") as handle:
             text = handle.read()
     except OSError:
         return None
-    return target if re.search(rf"^{re.escape(target)}\s*:", text, re.M) else None
+    return re.search(rf"^{re.escape(target)}\s*:", text, re.M) is not None
 
 
 def _run_declared_make_target(args, tier, target):
@@ -1871,13 +2018,10 @@ def main():
     _axi().add_tier_verbs(
         sub,
         # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
-        dict(unit=tier_verb(  # noqa: C408
-                 cmd_unit,
-                 "Runs the native host tests (`make junit`) under --dir -> "
-                 "/api/v2/runs.",
-                 (_add_native_dir_arg, _add_gate_cycle_arg,
-                  _add_run_release_arg, _add_reports_arg, _add_log_arg,
-                  _add_narrowing_args)),
+        dict(unit=_place_tier_verb(cmd_unit, "unit",  # noqa: C408
+                                   _add_narrowing_args),
+             integration=_place_tier_verb(cmd_integration, "integration"),
+             e2e=_place_tier_verb(cmd_e2e, "e2e"),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
