@@ -245,8 +245,11 @@ def _drive(project, env, proxy, board, marks):
     while reader.is_alive():
         if run.run_id is None:
             for record in proxy.since(start):
-                if record["path"] == "/api/v2/runs/start" and isinstance(record["answer"], dict):
-                    run.run_id = record["answer"].get("runId")
+                # A record carries no `answer` until the board has answered it:
+                # an unanswered start is read on a later poll.
+                answer = record.get("answer")
+                if record["path"] == "/api/v2/runs/start" and isinstance(answer, dict):
+                    run.run_id = answer.get("runId")
         if run.run_id is not None:
             before = _marks_state(marks)
             live = board.http(f"/api/v2/runs/{run.run_id}/live")
