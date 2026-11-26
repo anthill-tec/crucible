@@ -1254,8 +1254,6 @@ def cmd_test(args, tier=None):
     since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
-    if getattr(args, "hermetic", False):
-        _axi().prepare_hermetic_run(project_dir=project_dir)
     name = getattr(args, "name", None)
     # A package declaring a key the table replaced is refused before
     # anything reaches the board.
@@ -1485,8 +1483,6 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
-    if getattr(args, "hermetic", False):
-        _axi().prepare_hermetic_run(project_dir=project_dir)
     agent = getattr(args, "agent", None)
     # A package declaring a key the table replaced is refused first, before
     # anything is posted, whatever script this run would take.
@@ -2010,8 +2006,6 @@ def cmd_pre_merge_gate(args):
     # A package dir that cannot be run in is refused before the board is asked
     # anything.
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
-    if getattr(args, "hermetic", False):
-        _axi().prepare_hermetic_run(project_dir=project_dir)
     # A package declaring a key the table replaced is refused before the tsc
     # step, which files a compile result of its own.
     _refuse_old_keys(package_dir, "pre-merge-gate")
