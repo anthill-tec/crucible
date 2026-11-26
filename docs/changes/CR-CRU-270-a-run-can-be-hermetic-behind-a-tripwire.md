@@ -52,9 +52,15 @@ working tree:
 - operator registry variables unset (`CRUCIBLE_PROJECT_KEY`, `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`,
   `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`, `PROJECT_STACKS`, `KNOWLEDGE_CATEGORY`);
 - `DOCKER_HOST=unix:///nonexistent`;
-- standard read-only/local toolchain variables preserved when present (matching `scripts/hermetic/run.sh`:
-  `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME`, `ARDUINO_DIRECTORIES_DATA`, `GOROOT`, `GOPATH`,
-  `GOMODCACHE`, `GOCACHE`), plus any extra variable names declared in `[hermetic] allow_env` in `crucible.toml`.
+- the toolchain variables set to `scripts/hermetic/run.sh`'s defaults whenever they are unset, before `HOME` is
+  redirected (Ruling SF-2). The client path and the standalone CLI share one helper for this:
+  - `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME` and `ARDUINO_DIRECTORIES_DATA` point at the original
+    home's stores;
+  - `GOROOT` comes from `go env` when `go` is on `PATH`;
+  - `GOPATH`, `GOMODCACHE` and `GOCACHE` sit under the working tree's `.cache/test-suite`.
+
+  A value already set is kept. Any extra variable names declared in `[hermetic] allow_env` in `crucible.toml` are
+  passed through.
 
 **Gate behaviour (`pre-merge-gate --hermetic`, CR-CRU-274 Ruling Q4):**
 
@@ -107,9 +113,12 @@ allow_env = ["MY_TOOLCHAIN_CACHE"]     # optional list of non-empty env-var name
   `cwd`, `cmd`, `request` (first HTTP line, if any), and `test` (optional).
 - Test attribution: the tripwire inspects `/proc/<pid>/environ` for `CRUCIBLE_CURRENT_TEST` and `PYTEST_CURRENT_TEST`
   (stripping pytest's `" (call)"` / `" (setup)"` suffix when present). `clients/subtest_runner.py` sets
-  `CRUCIBLE_CURRENT_TEST` in `startTest` and clears it in `stopTest`, giving exact test attribution for Python
-  `unittest` and `pytest`. Runners that do not set either variable leave `test` absent/null and fall back cleanly to
-  `cmd` + `pid`.
+  `CRUCIBLE_CURRENT_TEST` in `startTest` and clears it in `stopTest`, and writes the current test's id to a
+  current-test file that the tripwire reads as a fallback. `/proc/<pid>/environ` shows only a process's environment
+  at exec, so a variable a runner sets in-process is not visible there. This gives exact test attribution for Python
+  `unittest` runs through the fleet's runner (Ruling SF-3). A pytest run is not named by test: pytest sets
+  `PYTEST_CURRENT_TEST` in-process, so the tripwire cannot read it. The python client drives unittest only, so pytest
+  is already a known client gap. Runners that expose neither leave `test` absent and fall back to `cmd` + `pid`.
 
 **Wire and board storage (Ruling Q2 — server `leaks[]` + failing `tripwire` suite):**
 
@@ -236,3 +245,11 @@ From the gap analysis and the user's answers:
 - **Q4 (S5 — retiring `scripts/hermetic/` & CI):** One shared stdlib engine in `clients/` (`_crucible_hermetic.py` +
   `_crucible_tripwire.py`) used by both `--hermetic` on every client and directly by CI (`release.yml`) without a
   board; delete `scripts/hermetic/run.sh` and `tripwire.py`; keep `scripts/hermetic/unit-check.sh` and its hooks.
+
+### Rulings after VERIFY (2026-11-27, cycle 1033)
+
+- **SF-2 (S1 — toolchain defaults):** a client `--hermetic` run applies the same toolchain defaults as the standalone
+  CLI (`run.sh`'s), through one shared helper. Without them a stock install's rust, go, arduino and bun-e2e runs
+  could not find their toolchains once `HOME` was redirected.
+- **SF-3 (S3 — pytest attribution):** the spec is corrected rather than extended. Exact test names cover unittest
+  runs through the fleet's runner; a pytest hit falls back to `cmd` + `pid`.
