@@ -876,6 +876,22 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
     return 0 if resp.get("ok") else 1
 
 
+def _leaked_run_exit(verb, result, project_dir, agent, run_id, *, runner, tier,
+                     release, warnings):
+    """The exit of a run whose runner wrote no report this client can file:
+    when its hermetic run caught a tripwire hit, the run is filed with its
+    leaks through the shared `emit_leaked_run` and its envelope written, so
+    the leak is never lost. None when it caught none (nothing is sent)."""
+    return _axi().emit_leaked_run(
+        result, post_fn=_post, stack=_STACK,
+        project_key=_project_key(project_dir),
+        agent_id=agent, run_id=run_id, tier=tier, context=_run_context(),
+        release=release, framework=runner, warnings=warnings,
+        no_report=_no_report_warning(verb, runner, result),
+        emit_ingest=lambda resp, found: _emit_ingest_axi(
+            verb, resp, project_dir, agent, warnings=found, ok=False))
+
+
 def _collect_coverage(python, project_dir, env, data_file=None):
     """Run `coverage lcov` and return the path of the lcov report it wrote,
     which the run sends for the board to decode; the client sums nothing.
@@ -1108,8 +1124,10 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         report_paths = _report_paths(reports_dir)
         # The client decides one thing locally, from the runner's exit and
         # the count of the report's test cases; everything else is the board's.
-        if _axi().ran_nothing(result.returncode,
-                              _axi().junit_testcase_count(report_paths)):
+        # A run that caught a tripwire hit is filed whatever it ran.
+        if (not _axi().pending_hermetic_run_leaks()
+                and _axi().ran_nothing(result.returncode,
+                                       _axi().junit_testcase_count(report_paths))):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
                 run_id, envelope_warnings, post_fn=_post,
@@ -1128,6 +1146,12 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         # The exit carries the runner's verdict and the filed run's, and a
         # refused ingest is never green.
         return _axi().verb_exit(runner_exit, resp)
+    # A hermetic run that caught a tripwire hit is filed with its leaks.
+    leaked_exit = _leaked_run_exit(verb, result, project_dir, args.agent, run_id,
+                                   runner=runner, tier=tier, release=release,
+                                   warnings=envelope_warnings)
+    if leaked_exit is not None:
+        return leaked_exit
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
@@ -1293,6 +1317,13 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # A pytest that failed as a runner wrote no result, whatever JUnit it left.
     if (_pytest_failed_as_runner(runner, result)
             or not _produced_xml(reports_dir)):
+        # A hermetic run that caught a tripwire hit is filed with its leaks.
+        if _axi().pending_hermetic_run_leaks():
+            _axi().close_narration(narrator)
+            return _leaked_run_exit(verb, result, project_dir, agent, run_id,
+                                    runner=runner, tier="regression",
+                                    release=release,
+                                    warnings=envelope_warnings)
         if _is_zero_discovery(result):
             # §S2 — a discovery that COLLECTED ZERO TESTS (start_dir/pattern matched
             # nothing) is a DEFINITIVE `no-tests-discovered` AXI error, NOT a masked
@@ -1338,8 +1369,10 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     report_paths = _report_paths(reports_dir)
     # The client decides one thing locally, from the runner's exit and the
     # count of the report's test cases; everything else is the board's.
-    if _axi().ran_nothing(result.returncode,
-                          _axi().junit_testcase_count(report_paths)):
+    # A run that caught a tripwire hit is filed whatever it ran.
+    if (not _axi().pending_hermetic_run_leaks()
+            and _axi().ran_nothing(result.returncode,
+                                   _axi().junit_testcase_count(report_paths))):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,

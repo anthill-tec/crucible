@@ -1048,6 +1048,56 @@ def verb_exit(runner_exit, response):
     return 0
 
 
+#: The route a run whose runner wrote no report it could file is filed on
+#: when it caught a tripwire hit: its counts and tree are stated outright.
+PARSED_INGEST_PATH = "/api/v2/runs/parsed"
+
+
+def file_leaked_run(post_fn, *, stack, project_key, agent_id, run_id=None,
+                    raw=None, runner_exit=None, tier=None, context=None,
+                    release=None, framework=None):
+    """File a hermetic run that caught a tripwire hit but has no report to
+    file, so the leak is never lost: ONE `POST /api/v2/runs/parsed` through
+    `post_ingest`, with zero counts and an empty tree, closing `run_id` when
+    given, carrying `raw`, `runnerExit`, `tier`, `context`, `release` and
+    `framework` when given, and the run's `leaks` (stamped by `post_ingest`).
+    The board appends the failing `tripwire` suite, so the run is red.
+
+    Returns the board's answer, or None (nothing sent) when this run caught
+    no hit: a run without one keeps its own no-report exit."""
+    if not _core.pending_hermetic_run_leaks():
+        return None
+    payload = {"projectKey": project_key, "agentId": agent_id,
+               "summary": {"total": 0, "passed": 0, "failed": 0,
+                           "pending": 0, "duration_ms": 0},
+               "tree": []}
+    optional = (("raw", raw), ("tier", tier), ("context", context),
+                ("runId", run_id), ("runnerExit", runner_exit))
+    payload.update({key: value for key, value in optional if value is not None})
+    resp = _core.post_ingest(post_fn, PARSED_INGEST_PATH, payload, stack=stack,
+                             release=release, **_framework_kwarg(framework))
+    _print_ingest_line(resp, "parsed")
+    return resp
+
+
+def emit_leaked_run(result, *, post_fn, emit_ingest, warnings=(), no_report=None,
+                    **filing):
+    """The exit of a hermetic run whose runner (its `CompletedProcess`
+    `result`) wrote no report it could file, when it caught a tripwire hit:
+    the run is filed through `post_fn` (`file_leaked_run`, `filing` its
+    keywords but `raw` and `runner_exit`, read off `result`) and its envelope
+    written through `emit_ingest(resp, warnings)`, `no_report` (the no-report
+    warning, when given) after the caller's `warnings`. Returns the verb's
+    exit code, or None when this run caught no hit and nothing was filed."""
+    runner_exit = runner_exit_code(result.returncode)
+    resp = file_leaked_run(post_fn, raw=getattr(result, "stdout", None) or None,
+                           runner_exit=runner_exit, **filing)
+    if resp is None:
+        return None
+    emit_ingest(resp, list(warnings) + ([no_report] if no_report else []))
+    return verb_exit(runner_exit, resp)
+
+
 def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),
                      *, post_fn, project_key, agent_id, subject=None):
     """The exit of a run `ran_nothing` describes \u2014 the no-report exit, never
@@ -1997,8 +2047,9 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
             zero_discovery=zero_discovery, stack=stack, gate=gate)
     count, total, stated, _ran = stream_counts(stream_path, codec)
     # A hermetic run's tripwire hits are never lost: a run that caught one is
-    # always closed by its stream, which files the hits (`post_ingest`), even
-    # when its runner reported nothing. Only this run's own hits count.
+    # always filed, by its stream when the board holds one, else with its hits
+    # alone (`file_leaked_run`), even when its runner reported nothing. Only
+    # this run's own hits count.
     leaked = bool(_core.pending_hermetic_run_leaks())
     zero = (zero_discovery(result)
             if count == 0 and zero_discovery is not None and not leaked
@@ -2043,12 +2094,20 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     if no_test_end:
         warnings.append(no_report_warning(result))
     runner_exit = runner_exit_code(result.returncode)
-    resp = close_stream(
-        post_fn, stack=stack, project_key=project_key, agent_id=agent_id,
-        run_id=run_id, codec=codec, raw=result.stdout,
-        coverage_codec=coverage_codec if coverage_paths else None,
-        coverage_paths=coverage_paths, tier=tier, context=context,
-        release=release, runner_exit=runner_exit, framework=framework)
+    if leaked and held == 0:
+        # The board holds no stream to close, so the run is filed with its
+        # hits alone.
+        resp = file_leaked_run(
+            post_fn, stack=stack, project_key=project_key, agent_id=agent_id,
+            run_id=run_id, raw=result.stdout or None, runner_exit=runner_exit,
+            tier=tier, context=context, release=release, framework=framework)
+    else:
+        resp = close_stream(
+            post_fn, stack=stack, project_key=project_key, agent_id=agent_id,
+            run_id=run_id, codec=codec, raw=result.stdout,
+            coverage_codec=coverage_codec if coverage_paths else None,
+            coverage_paths=coverage_paths, tier=tier, context=context,
+            release=release, runner_exit=runner_exit, framework=framework)
     exit_code = verb_exit(runner_exit, resp)
     warnings += list(close_warnings)
     help_steps = None

@@ -714,6 +714,64 @@ class HermeticLeakScopingAndFilingTest(_HermeticTestCase):
         # The invocation's own envelope still carries the hit it caught.
         self.assertEqual(self.axi.current_hermetic_leaks(), [_LEAK])
 
+    def test_a_run_with_no_report_files_its_hits_on_the_parsed_route(self):
+        posted = []
+        post = _fake_post(posted)
+        self.axi.note_hermetic_leaks([dict(_LEAK)])
+        with contextlib.redirect_stderr(io.StringIO()):
+            resp = self.axi.file_leaked_run(
+                post, stack="bun", project_key="k", agent_id="a", run_id="run-1",
+                raw="runner output", runner_exit=3, tier="unit", framework="bun")
+            again = self.axi.file_leaked_run(
+                post, stack="bun", project_key="k", agent_id="a", run_id="run-1")
+
+        self.assertTrue(resp.get("ok"))
+        self.assertIsNone(again, "a run's hits are filed once")
+        self.assertEqual(len(posted), 1)
+        path, payload = posted[0]
+        self.assertEqual(path, "/api/v2/runs/parsed")
+        self.assertEqual(payload["summary"], {"total": 0, "passed": 0, "failed": 0,
+                                              "pending": 0, "duration_ms": 0})
+        self.assertEqual(payload["tree"], [])
+        self.assertEqual(payload["leaks"], [_LEAK])
+        self.assertEqual(payload["runId"], "run-1")
+        self.assertEqual(payload["runnerExit"], 3)
+        self.assertEqual(payload["raw"], "runner output")
+        self.assertEqual(payload["tier"], "unit")
+        self.assertEqual(payload["stack"], "bun")
+        self.assertEqual(payload["framework"], "bun")
+
+    def test_a_run_with_no_report_and_no_hit_files_nothing(self):
+        posted = []
+        result = subprocess.CompletedProcess(args=["runner"], returncode=1, stdout="boom")
+        emitted = []
+        exit_code = self.axi.emit_leaked_run(
+            result, post_fn=_fake_post(posted), stack="python", project_key="k",
+            agent_id="a", run_id="run-1",
+            emit_ingest=lambda resp, found: emitted.append((resp, found)))
+        self.assertIsNone(exit_code)
+        self.assertEqual(posted, [])
+        self.assertEqual(emitted, [])
+
+    def test_a_leaked_run_with_no_report_exits_red_with_its_envelope(self):
+        posted = []
+        emitted = []
+        self.axi.note_hermetic_leaks([dict(_LEAK)])
+        result = subprocess.CompletedProcess(args=["runner"], returncode=3, stdout="boom")
+        no_report = {"code": "no-report", "detail": "the runner wrote no report"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            exit_code = self.axi.emit_leaked_run(
+                result, post_fn=_fake_post(posted), stack="python", project_key="k",
+                agent_id="a", run_id="run-1", warnings=[{"code": "earlier"}],
+                no_report=no_report,
+                emit_ingest=lambda resp, found: emitted.append((resp, found)))
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(posted[0][0], "/api/v2/runs/parsed")
+        self.assertEqual(posted[0][1]["runnerExit"], 3)
+        self.assertEqual(posted[0][1]["raw"], "boom")
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0][1], [{"code": "earlier"}, no_report])
+
 
 class ToolchainDefaultsTest(_HermeticTestCase):
     """S1 — every hermetic run, client and standalone, gets the toolchain

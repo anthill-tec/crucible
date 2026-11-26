@@ -493,6 +493,85 @@ class PythonHermeticEndToEndTest(unittest.TestCase):
         self.assertIsNone(stored.get("leaks"), f"clean run must store no leaks: {stored!r}")
         self.assertIsNone(_find_suite(stored.get("tree") or [], "tripwire"))
 
+    def test_python_unit_hermetic_files_leak_from_a_module_that_crashes_at_import(self):
+        project = self.scratch / "py-import-leak-project"
+        (project / "tests" / "unit").mkdir(parents=True)
+        (project / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        (project / "tests" / "unit" / "__init__.py").write_text("", encoding="utf-8")
+        (project / "tests" / "unit" / "test_import_leak.py").write_text(
+            textwrap.dedent("""\
+                import os
+                import unittest
+                import urllib.error
+                import urllib.request
+
+                assert os.environ.get("DOCKER_HOST") == "unix:///nonexistent", (
+                    "refusing to probe port 3849 outside hermetic isolation"
+                )
+                try:
+                    urllib.request.urlopen("http://127.0.0.1:3849/api/v2/health", timeout=5)
+                except urllib.error.HTTPError:
+                    pass
+                # The runner dies here, before any test runs or is reported.
+                os._exit(3)
+
+
+                class NeverRunsTest(unittest.TestCase):
+                    def test_never_runs(self):
+                        self.fail("the module crashed at import")
+                """),
+            encoding="utf-8",
+        )
+        self.board.install(str(project))
+        agent_id = "py-hermetic-import-leak-agent"
+        _register_agent(self.board, agent_id)
+        reports_dir = self.scratch / "py-import-leak-reports"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PYTHON_CLIENT),
+                "unit",
+                "--hermetic",
+                "--start-dir",
+                "tests/unit",
+                "--agent",
+                agent_id,
+                "--project-dir",
+                str(project),
+                "--reports",
+                str(reports_dir),
+            ],
+            cwd=str(project),
+            env=_client_env(self.outer_home),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+            check=False,
+        )
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            f"a crashed leaking run must exit non-zero; stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+        env = _parse_envelope(result.stdout, result.stderr)
+        self.assertIs(env.get("ok"), False, f"envelope={env!r}")
+
+        events = self.board.test_events(agent_id)
+        self.assertEqual(len(events), 1, f"expected 1 filed test event, got {events!r}")
+        stored = self.board.event(events[0]["id"])
+        summary = stored.get("summary") or {}
+        self.assertGreaterEqual(summary.get("failed", 0), 1, f"stored run must be red: {stored!r}")
+        leaks = stored.get("leaks") or []
+        self.assertTrue(
+            any(item.get("port") == 3849 for item in leaks),
+            f"stored event must carry a leak naming port 3849: {stored!r}",
+        )
+        tripwire_suite = _find_suite(stored.get("tree") or [], "tripwire")
+        self.assertIsNotNone(tripwire_suite, f"missing tripwire suite: {stored.get('tree')!r}")
+        assert tripwire_suite is not None
+        self.assertEqual(tripwire_suite.get("status"), "fail")
+
 
 class BunHermeticEndToEndTest(unittest.TestCase):
     """AC1 (Bun) and AC2 — real `bun-crucible.py unit --hermetic` against a real
@@ -650,6 +729,69 @@ class BunHermeticEndToEndTest(unittest.TestCase):
         self.assertGreaterEqual(summary.get("passed", 0), 1)
         self.assertIsNone(stored.get("leaks"))
         self.assertIsNone(_find_suite(stored.get("tree") or [], "tripwire"))
+
+    def test_bun_unit_hermetic_files_leak_when_the_runner_dies_before_any_report(self):
+        project = self._make_bun_project(
+            "bun-import-leak-project",
+            textwrap.dedent("""\
+                import { test } from "bun:test";
+
+                if (process.env.DOCKER_HOST !== "unix:///nonexistent") {
+                  throw new Error("refusing to probe port 3849 outside hermetic isolation");
+                }
+                await fetch("http://127.0.0.1:3849/api/v2/health").catch(() => undefined);
+                // The runner dies here, before any test runs or any report is written.
+                process.exit(3);
+
+                test("never runs", () => {});
+                """),
+        )
+        agent_id = "bun-hermetic-import-leak-agent"
+        _register_agent(self.board, agent_id)
+        reports_dir = self.scratch / "bun-import-leak-reports"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(BUN_CLIENT),
+                "unit",
+                "--hermetic",
+                "--agent",
+                agent_id,
+                "--project-dir",
+                str(project),
+                "--reports",
+                str(reports_dir),
+            ],
+            cwd=str(project),
+            env=_client_env(self.outer_home),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+            check=False,
+        )
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            f"a crashed leaking bun run must exit non-zero; stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+        env = _parse_envelope(result.stdout, result.stderr)
+        self.assertIs(env.get("ok"), False, f"envelope={env!r}")
+
+        events = self.board.test_events(agent_id)
+        self.assertEqual(len(events), 1, f"expected 1 filed bun test event, got {events!r}")
+        stored = self.board.event(events[0]["id"])
+        summary = stored.get("summary") or {}
+        self.assertGreaterEqual(summary.get("failed", 0), 1, f"stored bun run must be red: {stored!r}")
+        leaks = stored.get("leaks") or []
+        self.assertTrue(
+            any(item.get("port") == 3849 for item in leaks),
+            f"stored event must carry a leak naming port 3849: {stored!r}",
+        )
+        tripwire_suite = _find_suite(stored.get("tree") or [], "tripwire")
+        self.assertIsNotNone(tripwire_suite, f"missing tripwire suite: {stored.get('tree')!r}")
+        assert tripwire_suite is not None
+        self.assertEqual(tripwire_suite.get("status"), "fail")
 
 
 class PreMergeGateHermeticUnitCheckTest(unittest.TestCase):

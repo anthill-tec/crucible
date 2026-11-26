@@ -1131,6 +1131,24 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                                      run_id, abandoned, warnings, post_fn=_post)
 
 
+def _leaked_run_exit(verb, result, project_dir, agent_id, run_id, *, tier,
+                     release, framework, warnings, no_report, name=None,
+                     script=None):
+    """The exit of a run whose runner wrote no report this client can file:
+    when its hermetic run caught a tripwire hit, the run is filed with its
+    leaks through the shared `emit_leaked_run` and its envelope written, so
+    the leak is never lost. None when it caught none (nothing is sent)."""
+    return _axi().emit_leaked_run(
+        result, post_fn=_post, stack=_STACK,
+        project_key=_project_key(project_dir),
+        agent_id=agent_id, run_id=run_id, tier=tier, context=_run_context(),
+        release=release, framework=framework, warnings=warnings,
+        no_report=no_report,
+        emit_ingest=lambda resp, found: _emit_ingest_axi(
+            verb, resp, project_dir, agent_id, warnings=found, run_id=run_id,
+            name=name, script=script, ok=False))
+
+
 def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
                              warnings=(), script=None):
     """The exit of a `test --name` run in which nothing passed and nothing
@@ -1374,15 +1392,17 @@ def cmd_test(args, tier=None):
             # The client decides two things locally, from the runner's exit
             # and two counts over its JUnit report; everything else is the
             # board's.
-            if _axi().ran_nothing(result.returncode,
-                                  _axi().junit_testcase_count([junit_path])):
+            # A run that caught a tripwire hit is filed whatever it ran.
+            leaked = bool(_axi().pending_hermetic_run_leaks())
+            if not leaked and _axi().ran_nothing(
+                    result.returncode, _axi().junit_testcase_count([junit_path])):
                 return _axi().emit_ran_nothing(
                     "test", "junit.xml", result.returncode,
                     getattr(result, "stdout", None) or "", run_id,
                     run_warnings, post_fn=_post,
                     project_key=_project_key(project_dir),
                     agent_id=args.agent)
-            if (name is not None
+            if (not leaked and name is not None
                     and _axi().junit_non_skipped_count([junit_path]) == 0):
                 return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                                 name, run_warnings)
@@ -1403,10 +1423,20 @@ def cmd_test(args, tier=None):
             # The exit carries the runner's verdict and the filed run's, and
             # a refused ingest is never green.
             return _axi().verb_exit(runner_exit, resp)
+        tail = (getattr(result, "stdout", None) or "")[-4000:]
+        # A hermetic run that caught a tripwire hit is filed with its leaks.
+        leaked_exit = _leaked_run_exit(
+            "test", result, project_dir, args.agent, run_id, tier=tier,
+            release=release, framework=DEFAULT_FRAMEWORK,
+            warnings=run_warnings,
+            no_report=_axi().no_report_warning("test", "junit.xml",
+                                               result.returncode, tail),
+            name=name)
+        if leaked_exit is not None:
+            return leaked_exit
         # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
         # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
         # red — never a misleading clean '0 errors') + the captured output as raw.
-        tail = (getattr(result, "stdout", None) or "")[-4000:]
         synthetic = ("bun-test(1,1): error TS0000: "
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
@@ -1613,6 +1643,17 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # The report this run ingests is the JUnit XML it wrote.
         ingest_path = junit_path
         ingest_name = os.path.basename(ingest_path)
+        # A run that caught a tripwire hit is filed whatever it wrote.
+        leaked = bool(_axi().pending_hermetic_run_leaks())
+        if leaked and not os.path.exists(ingest_path):
+            _axi().close_narration(narrator)
+            return _leaked_run_exit(
+                verb, result, project_dir, args.agent, run_id, tier=tier,
+                release=release, framework=framework, warnings=run_warnings,
+                no_report=_axi().no_report_warning(
+                    verb, ingest_name, result.returncode,
+                    getattr(result, "stdout", None) or ""),
+                name=name, script=named_script)
         if not os.path.exists(ingest_path):
             print(f"[crucible] ERROR: no {ingest_name} produced — nothing to "
                   f"ingest", file=sys.stderr)
@@ -1654,7 +1695,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # exited non-zero, is a run that never ran: it takes the no-report
         # exit above, never a `total: 0` ingest.
         result_count = _axi().junit_testcase_count([junit_path])
-        if _axi().ran_nothing(result.returncode, result_count):
+        if not leaked and _axi().ran_nothing(result.returncode, result_count):
             return _axi().emit_ran_nothing(
                 verb, ingest_name, result.returncode,
                 getattr(result, "stdout", None) or "", run_id, run_warnings,
@@ -1666,7 +1707,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         _axi().close_narration(narrator)
         # A filtered run in which nothing passed and nothing failed ran
         # nothing: it is aborted, exactly as on `test`'s own path.
-        if (name is not None
+        if (not leaked and name is not None
                 and _axi().junit_non_skipped_count([junit_path]) == 0):
             return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                             name, run_warnings,
@@ -1835,7 +1876,10 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
               file=sys.stderr)
         if not agent:
             return result.returncode
+        # A run that caught a tripwire hit is closed by its stream, which
+        # files the hits, whatever it ran.
         if (name is not None and run_id
+                and not _axi().pending_hermetic_run_leaks()
                 and _axi().stream_counts(stream_path)[3] == 0):
             return _emit_filter_ran_nothing(project_dir, agent, run_id, name,
                                             warnings, script=named_script)

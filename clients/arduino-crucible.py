@@ -996,6 +996,20 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
             narrator = None
             if reports and not narrowed:
                 preflight_warnings.append(_stream_not_held_warning(stream_key))
+    # A run that caught a tripwire hit is filed whatever it wrote: its reports
+    # when it wrote any, else the hits alone.
+    leaked = bool(_axi().pending_hermetic_run_leaks())
+    if leaked and agent_id and not reports and not held:
+        return _axi().emit_leaked_run(
+            run, post_fn=_post, stack=_STACK, project_key=_project_key(pd),
+            agent_id=agent_id,
+            run_id=run_id, tier=tier, context=_run_context(), release=release,
+            framework=_STREAM_FRAMEWORK if stream_key else None,
+            warnings=preflight_warnings,
+            no_report=_axi().no_report_warning(verb, "TEST-*.xml",
+                                               run.returncode, run.stdout or ""),
+            emit_ingest=lambda resp, found: _emit_run_axi(
+                verb, resp, pd, agent_id, ok=False, warnings=found))
     if not reports and not held:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
         # stderr and exited 1 with EMPTY stdout. The runner's own output already
@@ -1025,13 +1039,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # A place-run tier verb whose reports hold no case that ran (none, or only
     # skipped ones) is refused before the ran-nothing check, narrowed or not.
     # A report that could not be counted is never an empty run.
-    if refuse_empty and _ran_no_case(reports, total):
+    if not leaked and refuse_empty and _ran_no_case(reports, total):
         return _refuse_no_case_run(verb, pd, agent_id, run_id, preflight_warnings)
     # A narrowed run whose reports hold zero cases ran nothing whatever
     # `make`'s exit: Unity with a `-f` that matches nothing exits 0. So does a
     # narrowed declared run whose stream the board holds no `test-end` of.
-    if not held and (_axi().ran_nothing(run.returncode, total)
-                     or (narrowed and (total == 0 or relay is not None))):
+    if not held and not leaked and (
+            _axi().ran_nothing(run.returncode, total)
+            or (narrowed and (total == 0 or relay is not None))):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
             preflight_warnings, post_fn=_post, project_key=_project_key(pd),
