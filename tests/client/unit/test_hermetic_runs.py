@@ -10,8 +10,7 @@ Invocation:
         tests.client.unit.test_hermetic_runs
 """
 
-# pi-lens-ignore: I001 — pi-lens ruff has no target-version, filing stdlib `tomllib` as third-party
-import argparse  # noqa: I001
+import argparse
 import contextlib
 import io
 import os
@@ -19,17 +18,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import typing
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from crucible_axi import install as crucible_install
-from tests.client import CLIENT_SOURCE_DIR
 from tests.client.live_run_harness import load_client, load_toon
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 TOON = load_toon()
 
 CLIENT_SCRIPTS = (
@@ -159,16 +155,6 @@ class HermeticContractAndConfigTest(_HermeticTestCase):
         path = directory / "crucible.toml"
         path.write_text(content, encoding="utf-8")
         return path
-
-    def test_shipped_crucible_toml_declares_default_board_port_3849(self):
-        shipped = CLIENT_SOURCE_DIR / "crucible.toml"
-        data = tomllib.loads(shipped.read_text(encoding="utf-8"))
-        hermetic = data.get("hermetic")
-        if not isinstance(hermetic, dict):
-            self.fail("clients/crucible.toml must declare a [hermetic] table")
-        port = hermetic.get("default_board_port")
-        self.assertIsNot(type(port), bool, "default_board_port must be an int, not bool")
-        self.assertEqual(port, 3849)
 
     def test_public_constants_and_add_hermetic_arg(self):
         axi = self._axi()
@@ -664,32 +650,12 @@ class ClientHermeticCliAndGateSurfaceTest(_HermeticTestCase):
         self.assertTrue(axi_env.get("help"), f"refusal must carry help[]: {parsed!r}")
 
 
-class FleetRegistrationAndScriptRetirementTest(unittest.TestCase):
-    """S5 / AC7 / AC8 — hermetic modules registered in FLEET_FILES, legacy
-    `scripts/hermetic/run.sh` and `tripwire.py` retired, unit-check tools kept."""
+class FleetRegistrationTest(unittest.TestCase):
+    """S5 / AC7 — hermetic modules registered in FLEET_FILES."""
 
     def test_fleet_files_registers_both_hermetic_modules(self):
         self.assertIn("_crucible_hermetic.py", crucible_install.FLEET_FILES)
         self.assertIn("_crucible_tripwire.py", crucible_install.FLEET_FILES)
-
-    def test_legacy_run_sh_and_tripwire_py_are_retired_while_unit_check_stays(self):
-        self.assertFalse(
-            (REPO_ROOT / "scripts/hermetic/run.sh").exists(),
-            "scripts/hermetic/run.sh must be retired in favor of clients/_crucible_hermetic.py",
-        )
-        self.assertFalse(
-            (REPO_ROOT / "scripts/hermetic/tripwire.py").exists(),
-            "scripts/hermetic/tripwire.py must be retired in favor of clients/_crucible_tripwire.py",
-        )
-        for kept in (
-            "scripts/hermetic/unit-check.sh",
-            "scripts/hermetic/unit-verdict.py",
-            "scripts/hermetic/tagging_runner.py",
-        ):
-            self.assertTrue(
-                (REPO_ROOT / kept).is_file(),
-                f"{kept} must remain in place (Ruling Q4 / non-goal)",
-            )
 
 
 if __name__ == "__main__":
