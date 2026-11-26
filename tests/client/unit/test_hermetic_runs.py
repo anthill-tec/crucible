@@ -862,6 +862,39 @@ class ToolchainDefaultsTest(_HermeticTestCase):
                          os.path.join(str(scratch), ".cache", "test-suite", "go"))
 
 
+class UnparsableConfigRefusalTest(_HermeticTestCase):
+    """S2 / AC5 — a project or install `crucible.toml` that does not parse is
+    refused naming the file, wherever `[hermetic]` is resolved."""
+
+    def setUp(self):
+        self.scratch = Path(tempfile.mkdtemp(prefix="hermetic-badtoml-"))
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.project_dir = self.scratch / "project"
+        self.install_dir = self.scratch / "install"
+        self.project_dir.mkdir()
+        self.install_dir.mkdir()
+        self.axi = self._axi()
+
+    def _assert_refused_naming(self, broken):
+        for resolve in (self.axi.resolve_hermetic_config, self.axi.resolve_tripwire_endpoints):
+            with self.subTest(resolve=resolve.__name__):
+                with self.assertRaises(self.axi.HermeticRefused) as refused:
+                    resolve(project_dir=str(self.project_dir),
+                            install_dir=str(self.install_dir))
+                self.assertEqual(refused.exception.code, "hermetic-config-invalid")
+                self.assertIn(str(broken), refused.exception.detail)
+
+    def test_an_unparsable_project_file_is_refused_naming_it(self):
+        broken = self.project_dir / "crucible.toml"
+        broken.write_text("[hermetic\ntripwires = [5432\n", encoding="utf-8")
+        self._assert_refused_naming(broken)
+
+    def test_an_unparsable_install_file_is_refused_naming_it(self):
+        broken = self.install_dir / "crucible.toml"
+        broken.write_text("[hermetic]\nallow_env = [\n", encoding="utf-8")
+        self._assert_refused_naming(broken)
+
+
 class FleetRegistrationTest(unittest.TestCase):
     """S5 / AC7 — hermetic modules registered in FLEET_FILES."""
 

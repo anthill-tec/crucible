@@ -237,13 +237,20 @@ def _config_candidates(
 
 
 def _read_toml_file(path: str) -> dict[str, typing.Any] | None:
+    """The parsed `crucible.toml` at `path`, or None when there is none. A
+    file that exists but cannot be read or parsed is refused naming it: its
+    `[hermetic]` declarations are never silently dropped."""
     try:
         with open(path, "rb") as fh:
             return tomllib.load(fh)
     except (FileNotFoundError, NotADirectoryError):
         return None
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as exc:
+        raise HermeticRefused(
+            code="hermetic-config-invalid",
+            detail=f"{path} cannot be read as TOML: {exc}",
+            help_steps=[f"fix the TOML syntax of {path}"],
+        ) from exc
 
 
 def _config_refusal(path: str, field: str, reason: str) -> HermeticRefused:
