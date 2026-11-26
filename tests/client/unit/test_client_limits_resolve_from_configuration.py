@@ -171,6 +171,9 @@ PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 LINT_MODULE_PATH = CLIENTS_DIR / "_crucible_lint.py"
 #: The board module, loaded the same way.
 BOARD_MODULE_PATH = CLIENTS_DIR / "_crucible_board.py"
+#: The hermetic runner and its tripwire, loaded the same way.
+HERMETIC_MODULE_PATH = CLIENTS_DIR / "_crucible_hermetic.py"
+TRIPWIRE_MODULE_PATH = CLIENTS_DIR / "_crucible_tripwire.py"
 
 #: The files the fixture's scratch fleet carries: the shared module under test,
 #: the run module it loads from its own directory, the client whose REAL entry
@@ -179,6 +182,7 @@ BOARD_MODULE_PATH = CLIENTS_DIR / "_crucible_board.py"
 #: clients-only copy lays down a module that cannot resolve anything.
 _SCRATCH_FLEET = (AXI_MODULE_PATH, RUN_MODULE_PATH, RELEASE_MODULE_PATH,
                   PROJECT_MODULE_PATH, LINT_MODULE_PATH, BOARD_MODULE_PATH,
+                  HERMETIC_MODULE_PATH, TRIPWIRE_MODULE_PATH,
                   BUN_CLIENT_PATH,
                   TOON_MODULE_PATH,
                   SHIPPED_DATA_PATH)

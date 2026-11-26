@@ -39,6 +39,7 @@ import type {
   GateDecisionAction,
   GateMilestoneFields,
   GateSuiteEntry,
+  LeakRecord,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -917,6 +918,11 @@ export interface RecordEventMeta {
    * Omitting it stores a compile record exactly as before.
    */
   lint?: string;
+  /**
+   * Outbound connection leaks caught by a hermetic run's tripwire. Omitting or
+   * passing an empty array stores no `leaks` key on the event.
+   */
+  leaks?: LeakRecord[];
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -4643,6 +4649,7 @@ export class Store {
         ? { startedAt: meta.lifecycle.startedAt, runtimeMs: meta.lifecycle.runtimeMs }
         : {}),
       ...(meta?.incomplete !== undefined ? { incomplete: meta.incomplete } : {}),
+      ...(meta?.leaks && meta.leaks.length > 0 ? { leaks: meta.leaks } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -6570,6 +6577,8 @@ export class Store {
       ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
       // A lint record's linter rides the same blob: no column, no migration.
       ...(event.lint !== undefined ? { lint: event.lint } : {}),
+      // Tripwire leak records ride the same blob: no column, no migration.
+      ...(event.leaks !== undefined && event.leaks.length > 0 ? { leaks: event.leaks } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
@@ -6989,6 +6998,10 @@ export class Store {
       ...(typeof payload.incomplete === "string" ? { incomplete: payload.incomplete } : {}),
       // A lint record's linter; ABSENT on every record posted without one.
       ...(typeof payload.lint === "string" ? { lint: payload.lint } : {}),
+      // Tripwire leak records; ABSENT when none were recorded.
+      ...(Array.isArray(payload.leaks) && payload.leaks.length > 0
+        ? { leaks: payload.leaks as LeakRecord[] }
+        : {}),
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),

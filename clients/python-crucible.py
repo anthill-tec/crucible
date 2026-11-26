@@ -876,6 +876,22 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
     return 0 if resp.get("ok") else 1
 
 
+def _leaked_run_exit(verb, result, project_dir, agent, run_id, *, runner, tier,
+                     release, warnings):
+    """The exit of a run whose runner wrote no report this client can file:
+    when its hermetic run caught a tripwire hit, the run is filed with its
+    leaks through the shared `emit_leaked_run` and its envelope written, so
+    the leak is never lost. None when it caught none (nothing is sent)."""
+    return _axi().emit_leaked_run(
+        result, post_fn=_post, stack=_STACK,
+        project_key=_project_key(project_dir),
+        agent_id=agent, run_id=run_id, tier=tier, context=_run_context(),
+        release=release, framework=runner, warnings=warnings,
+        no_report=_no_report_warning(verb, runner, result),
+        emit_ingest=lambda resp, found: _emit_ingest_axi(
+            verb, resp, project_dir, agent, warnings=found, ok=False))
+
+
 def _collect_coverage(python, project_dir, env, data_file=None):
     """Run `coverage lcov` and return the path of the lcov report it wrote,
     which the run sends for the board to decode; the client sums nothing.
@@ -1023,6 +1039,8 @@ def cmd_test(args, tier=None, verb="test"):
     project_dir = _resolve_project_dir(args.project_dir)
     # The runner is chosen, and refused, before anything reaches the board.
     runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
                           "gated test run starting",
@@ -1078,8 +1096,12 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # The runner's fallback line, once seen, rides every envelope below.
     watch = _FallbackWatch(narrator, runner)
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env,
+        with (_axi().ChildRunTiming() as timing,
+              _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
@@ -1102,8 +1124,10 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         report_paths = _report_paths(reports_dir)
         # The client decides one thing locally, from the runner's exit and
         # the count of the report's test cases; everything else is the board's.
-        if _axi().ran_nothing(result.returncode,
-                              _axi().junit_testcase_count(report_paths)):
+        # A run that caught a tripwire hit is filed whatever it ran.
+        if (not _axi().pending_hermetic_run_leaks()
+                and _axi().ran_nothing(result.returncode,
+                                       _axi().junit_testcase_count(report_paths))):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
                 run_id, envelope_warnings, post_fn=_post,
@@ -1122,6 +1146,12 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         # The exit carries the runner's verdict and the filed run's, and a
         # refused ingest is never green.
         return _axi().verb_exit(runner_exit, resp)
+    # A hermetic run that caught a tripwire hit is filed with its leaks.
+    leaked_exit = _leaked_run_exit(verb, result, project_dir, args.agent, run_id,
+                                   runner=runner, tier=tier, release=release,
+                                   warnings=envelope_warnings)
+    if leaked_exit is not None:
+        return leaked_exit
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
@@ -1160,6 +1190,8 @@ def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
     # The runner is chosen, and refused, before anything reaches the board.
     if runner is None:
         runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
@@ -1267,8 +1299,11 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # The runner's fallback line, once seen, rides every envelope below.
     watch = _FallbackWatch(narrator, runner)
     try:
-        with _axi().abandon_trap(run_id):
-            result = _run_logged(run_cmd, project_dir, env,
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(run_cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent,
@@ -1282,6 +1317,13 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # A pytest that failed as a runner wrote no result, whatever JUnit it left.
     if (_pytest_failed_as_runner(runner, result)
             or not _produced_xml(reports_dir)):
+        # A hermetic run that caught a tripwire hit is filed with its leaks.
+        if _axi().pending_hermetic_run_leaks():
+            _axi().close_narration(narrator)
+            return _leaked_run_exit(verb, result, project_dir, agent, run_id,
+                                    runner=runner, tier="regression",
+                                    release=release,
+                                    warnings=envelope_warnings)
         if _is_zero_discovery(result):
             # §S2 — a discovery that COLLECTED ZERO TESTS (start_dir/pattern matched
             # nothing) is a DEFINITIVE `no-tests-discovered` AXI error, NOT a masked
@@ -1327,8 +1369,10 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     report_paths = _report_paths(reports_dir)
     # The client decides one thing locally, from the runner's exit and the
     # count of the report's test cases; everything else is the board's.
-    if _axi().ran_nothing(result.returncode,
-                          _axi().junit_testcase_count(report_paths)):
+    # A run that caught a tripwire hit is filed whatever it ran.
+    if (not _axi().pending_hermetic_run_leaks()
+            and _axi().ran_nothing(result.returncode,
+                                   _axi().junit_testcase_count(report_paths))):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,
@@ -1476,8 +1520,12 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
             agent, run_id, stream_path, STREAM_CODEC,
             _axi()._ingest_body_limit(health))
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, runner_env,
+        with (_axi().ChildRunTiming() as timing,
+              _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, runner_env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None))
     except _axi().RunAbandoned as abandoned:
         # The tests the runner wrote before the signal reach the board
@@ -1631,6 +1679,8 @@ def cmd_pre_merge_gate(args):
     # The runner is chosen, and refused, before the check step and before
     # anything reaches the board.
     runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     # The gate files from its first step on (a failing py_compile files a
     # compile result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -1687,6 +1737,7 @@ def cmd_pre_merge_gate(args):
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
         release=getattr(args, "release", None), runner=runner,
+        hermetic=bool(getattr(args, "hermetic", False)),
     )
     # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
     # composed once for the fleet. This stack's surface enumerates none (the
@@ -2323,6 +2374,7 @@ def main():
     _add_runner_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -2397,6 +2449,7 @@ def main():
     _add_runner_arg(pmg)
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",

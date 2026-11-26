@@ -239,6 +239,15 @@ export interface PackageRef {
   version: string;
 }
 
+export interface LeakRecord {
+  endpoint: string;
+  port: number;
+  test?: string;
+  pid?: string;
+  cmd?: string;
+  request?: string;
+}
+
 export interface RunEvent {
   id: string;
   projectKey: string;
@@ -440,6 +449,11 @@ export interface RunEvent {
    * record. ABSENT — never null — on every compile record and every other kind.
    */
   lint?: string;
+  /**
+   * Outbound connection leaks caught by a hermetic run's tripwire. ABSENT —
+   * never empty or null — when the run recorded no leaks.
+   */
+  leaks?: LeakRecord[];
 }
 
 /** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */

@@ -1131,6 +1131,24 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                                      run_id, abandoned, warnings, post_fn=_post)
 
 
+def _leaked_run_exit(verb, result, project_dir, agent_id, run_id, *, tier,
+                     release, framework, warnings, no_report, name=None,
+                     script=None):
+    """The exit of a run whose runner wrote no report this client can file:
+    when its hermetic run caught a tripwire hit, the run is filed with its
+    leaks through the shared `emit_leaked_run` and its envelope written, so
+    the leak is never lost. None when it caught none (nothing is sent)."""
+    return _axi().emit_leaked_run(
+        result, post_fn=_post, stack=_STACK,
+        project_key=_project_key(project_dir),
+        agent_id=agent_id, run_id=run_id, tier=tier, context=_run_context(),
+        release=release, framework=framework, warnings=warnings,
+        no_report=no_report,
+        emit_ingest=lambda resp, found: _emit_ingest_axi(
+            verb, resp, project_dir, agent_id, warnings=found, run_id=run_id,
+            name=name, script=script, ok=False))
+
+
 def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
                              warnings=(), script=None):
     """The exit of a `test --name` run in which nothing passed and nothing
@@ -1212,6 +1230,17 @@ def _marked_test_script(package_dir):
     return script, targets[script].get("framework"), None
 
 
+def _hermetic_bun_cmd(cmd, *, is_bun_test=False):
+    """Prevent bun from auto-loading the working tree's `.env` during a
+    hermetic run so operator registry variables are not re-injected."""
+    if not cmd:
+        return cmd
+    out = [cmd[0], "--no-env-file", *cmd[1:]]
+    if is_bun_test and len(cmd) >= 2 and cmd[1] == "run":
+        out.append("--no-env-file")
+    return out
+
+
 def cmd_test(args, tier=None):
     """Targeted/whole-suite `bun test` → junit → ingest.
 
@@ -1269,6 +1298,8 @@ def cmd_test(args, tier=None):
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
     cmd = _bun_test_cmd(bun, tests, junit_path, False, None, name=name)
+    if getattr(args, "hermetic", False):
+        cmd = _hermetic_bun_cmd(cmd, is_bun_test=True)
     env = os.environ.copy()
     print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
     # Capture output whenever an ingest may be needed: bun's JUnit reporter
@@ -1329,9 +1360,12 @@ def cmd_test(args, tier=None):
         try:
             with _axi().ChildRunTiming() as timing, _abandon_trap(run_id), \
                     _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(cmd, run_env,
+                                         enabled=bool(getattr(args, "hermetic", False)),
+                                         project_dir=project_dir) as wrapped, \
                     _console_observer(relay, reports_dir, narrator) as observer:
-                result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     observer)
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path, observer)
         except _axi().RunAbandoned as abandoned:
             # What the runner wrote before the signal reaches the board
             # before the run is aborted.
@@ -1356,15 +1390,17 @@ def cmd_test(args, tier=None):
             # The client decides two things locally, from the runner's exit
             # and two counts over its JUnit report; everything else is the
             # board's.
-            if _axi().ran_nothing(result.returncode,
-                                  _axi().junit_testcase_count([junit_path])):
+            # A run that caught a tripwire hit is filed whatever it ran.
+            leaked = bool(_axi().pending_hermetic_run_leaks())
+            if not leaked and _axi().ran_nothing(
+                    result.returncode, _axi().junit_testcase_count([junit_path])):
                 return _axi().emit_ran_nothing(
                     "test", "junit.xml", result.returncode,
                     getattr(result, "stdout", None) or "", run_id,
                     run_warnings, post_fn=_post,
                     project_key=_project_key(project_dir),
                     agent_id=args.agent)
-            if (name is not None
+            if (not leaked and name is not None
                     and _axi().junit_non_skipped_count([junit_path]) == 0):
                 return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                                 name, run_warnings)
@@ -1385,10 +1421,20 @@ def cmd_test(args, tier=None):
             # The exit carries the runner's verdict and the filed run's, and
             # a refused ingest is never green.
             return _axi().verb_exit(runner_exit, resp)
+        tail = (getattr(result, "stdout", None) or "")[-4000:]
+        # A hermetic run that caught a tripwire hit is filed with its leaks.
+        leaked_exit = _leaked_run_exit(
+            "test", result, project_dir, args.agent, run_id, tier=tier,
+            release=release, framework=DEFAULT_FRAMEWORK,
+            warnings=run_warnings,
+            no_report=_axi().no_report_warning("test", "junit.xml",
+                                               result.returncode, tail),
+            name=name)
+        if leaked_exit is not None:
+            return leaked_exit
         # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
         # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
         # red — never a misleading clean '0 errors') + the captured output as raw.
-        tail = (getattr(result, "stdout", None) or "")[-4000:]
         synthetic = ("bun-test(1,1): error TS0000: "
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
@@ -1563,9 +1609,15 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
             run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(
+                        _hermetic_bun_cmd(cmd, is_bun_test=(framework == DEFAULT_FRAMEWORK))
+                        if getattr(args, "hermetic", False) else cmd,
+                        run_env,
+                        enabled=bool(getattr(args, "hermetic", False)),
+                        project_dir=project_dir) as wrapped, \
                     _console_observer(relay, reports_dir, narrator) as observer:
-                result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     observer)
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path, observer)
         except _axi().RunAbandoned as abandoned:
             _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, args.agent,
@@ -1587,6 +1639,17 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # The report this run ingests is the JUnit XML it wrote.
         ingest_path = junit_path
         ingest_name = os.path.basename(ingest_path)
+        # A run that caught a tripwire hit is filed whatever it wrote.
+        leaked = bool(_axi().pending_hermetic_run_leaks())
+        if leaked and not os.path.exists(ingest_path):
+            _axi().close_narration(narrator)
+            return _leaked_run_exit(
+                verb, result, project_dir, args.agent, run_id, tier=tier,
+                release=release, framework=framework, warnings=run_warnings,
+                no_report=_axi().no_report_warning(
+                    verb, ingest_name, result.returncode,
+                    getattr(result, "stdout", None) or ""),
+                name=name, script=named_script)
         if not os.path.exists(ingest_path):
             print(f"[crucible] ERROR: no {ingest_name} produced — nothing to "
                   f"ingest", file=sys.stderr)
@@ -1628,7 +1691,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # exited non-zero, is a run that never ran: it takes the no-report
         # exit above, never a `total: 0` ingest.
         result_count = _axi().junit_testcase_count([junit_path])
-        if _axi().ran_nothing(result.returncode, result_count):
+        if not leaked and _axi().ran_nothing(result.returncode, result_count):
             return _axi().emit_ran_nothing(
                 verb, ingest_name, result.returncode,
                 getattr(result, "stdout", None) or "", run_id, run_warnings,
@@ -1640,7 +1703,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         _axi().close_narration(narrator)
         # A filtered run in which nothing passed and nothing failed ran
         # nothing: it is aborted, exactly as on `test`'s own path.
-        if (name is not None
+        if (not leaked and name is not None
                 and _axi().junit_non_skipped_count([junit_path]) == 0):
             return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                             name, run_warnings,
@@ -1788,8 +1851,15 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
                     _project_key(project_dir), agent, run_id, stream_path,
                     codec, _axi()._ingest_body_limit(health))
         try:
-            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
-                result = _run_logged(cmd, package_dir, run_env, log_path)
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(
+                        _hermetic_bun_cmd(cmd, is_bun_test=(framework == DEFAULT_FRAMEWORK))
+                        if getattr(args, "hermetic", False) else cmd,
+                        run_env,
+                        enabled=bool(getattr(args, "hermetic", False)),
+                        project_dir=project_dir) as wrapped:
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path)
         except _axi().RunAbandoned as abandoned:
             _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, agent, run_id,
@@ -1802,7 +1872,10 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
               file=sys.stderr)
         if not agent:
             return result.returncode
+        # A run that caught a tripwire hit is closed by its stream, which
+        # files the hits, whatever it ran.
         if (name is not None and run_id
+                and not _axi().pending_hermetic_run_leaks()
                 and _axi().stream_counts(stream_path)[3] == 0):
             return _emit_filter_ran_nothing(project_dir, agent, run_id, name,
                                             warnings, script=named_script)
@@ -2070,6 +2143,7 @@ def _gate_regression_args(args):
         # CR-CRU-017 §S4 — the gate's own opt-out decision carries into the
         # regression it runs; the step must never re-decide it.
         no_lifecycle=getattr(args, "no_lifecycle", True),
+        hermetic=bool(getattr(args, "hermetic", False)),
     )
 
 
@@ -2086,7 +2160,8 @@ def _dispatch_gate_suite(args, suite):
     return (_axi().sibling_client_argv(suite.stack, suite.command,
                                        agent=args.agent,
                                        release=getattr(args, "release", None),
-                                       cycle=getattr(args, "cycle", None)),
+                                       cycle=getattr(args, "cycle", None),
+                                       hermetic=bool(getattr(args, "hermetic", False))),
             package_dir)
 
 
@@ -2944,6 +3019,7 @@ def main():
     _add_project_dir_arg(t)
     _add_log_arg(t)
     _add_no_lifecycle_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -3021,6 +3097,7 @@ def main():
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
     _add_no_lifecycle_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",

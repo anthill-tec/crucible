@@ -1022,9 +1022,12 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
                 listed_total=total)
             print(f"[crucible] running: {running} (in {', '.join(modules)})",
                   file=sys.stderr)
-            result = _axi().run_streamed(run_cmd, run_cwd, dict(os.environ),
-                                         getattr(args, "log", None),
-                                         capture=True, stdout_path=stream_path)
+            with _axi().hermetic_wrap(run_cmd, dict(os.environ),
+                                      enabled=bool(getattr(args, "hermetic", False)),
+                                      project_dir=project_dir) as wrapped:
+                result = _axi().run_streamed(wrapped.cmd, run_cwd, wrapped.env,
+                                             getattr(args, "log", None),
+                                             capture=True, stdout_path=stream_path)
     except _axi().RunAbandoned as abandoned:
         # What the run streamed before the signal reaches the board first.
         if relay is not None:
@@ -1642,6 +1645,7 @@ def _add_lifecycle_verbs(sub):
     _add_gate_cycle_arg(t)
     _axi().add_run_release_arg(t)
     _add_project_dir_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     c = sub.add_parser(
@@ -1789,6 +1793,7 @@ def _add_gate_verbs(sub):
     _axi().add_run_release_arg(g)
     _axi().add_gate_suites_arg(g)
     _add_project_dir_arg(g)
+    _axi().add_hermetic_arg(g)
     g.set_defaults(func=cmd_pre_merge_gate)
 
 

@@ -287,3 +287,18 @@ max = 500
 # [client]
 # url = "http://<host>:<port>"
 
+# ── Hermetic runs (`--hermetic`) ────────────────────────────────────────────
+#
+# A hermetic run executes tests inside an unprivileged Linux user and network
+# namespace (loopback only, all capabilities dropped, empty HOME, scrubbed
+# operator environment, DOCKER_HOST neutralized) behind a loopback tripwire
+# that listens on every configured board port and extra endpoint.
+#
+# `default_board_port` is the default board port always guarded by the
+# tripwire alongside the project's and install's declared `[client] url` ports
+# and any project-declared `tripwires`. A project's own `crucible.toml` can
+# declare extra `tripwires` (ports or `"host:port"` / `"[::1]:port"` strings)
+# and `allow_env` (extra environment variable names to pass through).
+[hermetic]
+default_board_port = 3849
+

@@ -66,6 +66,7 @@ import type {
   GateMilestoneFields,
   GateScope,
   GateSuiteEntry,
+  LeakRecord,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -126,6 +127,8 @@ interface V2Body {
   context?: unknown;
   // the exit code of the runner that produced a run ingest
   runnerExit?: unknown;
+  // outbound connection leaks caught by a hermetic run's tripwire
+  leaks?: unknown;
   // the linter a compile post names, which makes it a lint record
   lint?: unknown;
   // CR-CRU-011 §S0 — cycle-plan routes
@@ -1080,6 +1083,93 @@ function fileRunnerExit(run: RunSchema, runnerExit: unknown): RunSchema {
   };
 }
 
+const OPTIONAL_LEAK_FIELDS = ["test", "pid", "cmd", "request"] as const;
+
+function parseLeakItem(item: unknown, index: number): { leak?: LeakRecord; error?: string } {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return { error: `leaks[${index}] must be an object — run NOT stored` };
+  }
+  const rec = item as Record<string, unknown>;
+  if (typeof rec.endpoint !== "string" || rec.endpoint.trim().length === 0) {
+    return { error: `leaks[${index}].endpoint must be a non-empty string — run NOT stored` };
+  }
+  if (
+    typeof rec.port !== "number" ||
+    !Number.isInteger(rec.port) ||
+    rec.port < 1 ||
+    rec.port > 65535
+  ) {
+    return { error: `leaks[${index}].port must be an integer in 1..65535 — run NOT stored` };
+  }
+  const leak: LeakRecord = { endpoint: rec.endpoint, port: rec.port };
+  for (const field of OPTIONAL_LEAK_FIELDS) {
+    const value = rec[field];
+    if (value !== undefined) {
+      if (typeof value !== "string") {
+        return { error: `leaks[${index}].${field} must be a string — run NOT stored` };
+      }
+      leak[field] = value;
+    }
+  }
+  return { leak };
+}
+
+/**
+ * Validate optional `leaks` on a run ingest before any store write.
+ * Absent or empty `leaks` returns `{}`; a malformed payload returns a 400
+ * naming `leaks` and `run NOT stored`.
+ */
+function parseLeaks(body: V2Body): { leaks?: LeakRecord[]; fail?: Response } {
+  const raw = body.leaks;
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) {
+    return { fail: fail(400, "leaks must be an array of { endpoint, port, ... } — run NOT stored") };
+  }
+  if (raw.length === 0) return {};
+  const leaks: LeakRecord[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const parsed = parseLeakItem(raw[i], i);
+    if (parsed.error !== undefined) return { fail: fail(400, parsed.error) };
+    leaks.push(parsed.leak!);
+  }
+  return { leaks };
+}
+
+/**
+ * When a hermetic run recorded tripwire leaks, append one failing `tripwire`
+ * suite holding one failing case per leak and increment total/failed counts.
+ * Applied before `fileRunnerExit` so a tripwire hit turns the run red first
+ * without triggering a redundant `runner` suite on a non-zero exit.
+ */
+function fileTripwireLeaks(run: RunSchema, leaks: LeakRecord[] | undefined): RunSchema {
+  if (!leaks || leaks.length === 0) return run;
+  const suite: SuiteNode = {
+    name: "tripwire",
+    status: "fail",
+    children: leaks.map((leak) => {
+      const parts = [`outbound connection to ${leak.endpoint}`];
+      if (leak.test) parts.push(`test: ${leak.test}`);
+      else if (leak.cmd) parts.push(`cmd: ${leak.cmd}`);
+      if (leak.request) parts.push(`request: ${leak.request}`);
+      return {
+        name: leak.test ? `${leak.endpoint} — ${leak.test}` : leak.endpoint,
+        status: "fail" as const,
+        duration_ms: 0,
+        failure: { message: parts.join(" · ") },
+      };
+    }),
+  };
+  return {
+    ...run,
+    summary: {
+      ...run.summary,
+      total: run.summary.total + leaks.length,
+      failed: run.summary.failed + leaks.length,
+    },
+    tree: [...run.tree, suite],
+  };
+}
+
 /**
  * CR-CRU-024 §S7 — validate a run ingest's `context.cycleId` against stored
  * plan state (Crucible is the source of truth, not the client). Returns:
@@ -1380,6 +1470,7 @@ function runResponse(
           : summary,
       verdict: runVerdict(summary),
       ...attachEcho(event),
+      ...(event.leaks && event.leaks.length > 0 ? { leaks: event.leaks } : {}),
       ...(warnings !== undefined ? { warnings } : {}),
     },
     { help },
@@ -1760,6 +1851,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if (badStack !== null) return badStack;
   const badExit = refuseBadRunnerExit(body);
   if (badExit !== null) return badExit;
+  const parsedLeaks = parseLeaks(body);
+  if (parsedLeaks.fail !== undefined) return parsedLeaks.fail;
   const badStreamUse = refuseStreamCodecUse(codec, codecName, body);
   if (badStreamUse !== null) return badStreamUse;
 
@@ -1793,7 +1886,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if (close.fail !== undefined) return close.fail;
 
   const fileRun = (decoded: { run: RunSchema; warnings: IngestWarning[]; files: number }, incomplete?: string) => {
-    const run = fileRunnerExit(decoded.run, body.runnerExit);
+    const run = fileRunnerExit(fileTripwireLeaks(decoded.run, parsedLeaks.leaks), body.runnerExit);
     const event = store.recordTestEvent(pk.key, agentId, run, {
       codec: codecName,
       // The ingest's stack/tier when stated, else the start's.
@@ -1805,6 +1898,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
       ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
       ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
       ...(incomplete !== undefined ? { incomplete } : {}),
+      ...(parsedLeaks.leaks !== undefined ? { leaks: parsedLeaks.leaks } : {}),
     });
     // The run is settled by the event that closed it — recorded after the write,
     // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
@@ -1956,6 +2050,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   if (badStack !== null) return badStack;
   const badExit = refuseBadRunnerExit(body);
   if (badExit !== null) return badExit;
+  const parsedLeaks = parseLeaks(body);
+  if (parsedLeaks.fail !== undefined) return parsedLeaks.fail;
 
   if (typeof body.summary !== "object" || body.summary === null) {
     return fail(400, "summary is required");
@@ -1970,14 +2066,17 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
 
   const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
   const run = fileRunnerExit(
-    {
-      summary: body.summary as RunSummary,
-      tree: body.tree as SuiteNode[],
-      // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
-      ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
-      // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
-      ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
-    },
+    fileTripwireLeaks(
+      {
+        summary: body.summary as RunSummary,
+        tree: body.tree as SuiteNode[],
+        // Discard-on-fail is applied by the store; pass coverage through.
+        ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
+        // Run-level raw output; retained even on a failing ingest.
+        ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
+      },
+      parsedLeaks.leaks,
+    ),
     body.runnerExit,
   );
   const summary = run.summary;
@@ -2014,6 +2113,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
     ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+    ...(parsedLeaks.leaks !== undefined ? { leaks: parsedLeaks.leaks } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);

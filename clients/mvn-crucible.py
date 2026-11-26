@@ -1046,11 +1046,15 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
             # warnings, where the pre-flight's would.
             if release:
                 run_warnings = [_axi().release_run_note(release)] + run_warnings
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id), \
-                console.observer(narrator) as observer:
+        with (_axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
             # The console is captured on both paths: an empty selection is
             # read from it, and stdout carries the envelope alone.
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None),
                                  observer, capture=True)
     except _axi().RunAbandoned as abandoned:
         # What maven wrote before the signal reaches the board before the run
@@ -1079,7 +1083,15 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
         maven_dir, module, kinds, reports_dir, since)
     dirs = _dirs_with_xml(_run_read_dirs(maven_dir, module, kinds, reports_dir))
     paths = _fresh(_report_paths(dirs), since)
-    if _selection_is_empty(result, paths):
+    # A run that caught a tripwire hit is filed whatever it wrote: its reports
+    # when it wrote any, else the hits alone.
+    leaked = bool(_axi().pending_hermetic_run_leaks())
+    if leaked and not paths:
+        return _leaked_run_exit(label, result, project_dir, args.agent, run_id,
+                                tier=label, release=release,
+                                framework=console.framework,
+                                warnings=pinned_warnings)
+    if not leaked and _selection_is_empty(result, paths):
         return _refuse_empty_selection(label, kinds, args, project_dir, run_id,
                                        pinned_warnings)
     if not paths:
@@ -1092,7 +1104,7 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
         # the compile ingest answered.
         return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
-    if _reports_ran_nothing(result, paths):
+    if not leaked and _reports_ran_nothing(result, paths):
         return _axi().emit_ran_nothing(
             label, "surefire reports", result.returncode,
             getattr(result, "stdout", None) or "", run_id, pinned_warnings,
@@ -1114,6 +1126,24 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
     # The exit carries the runner's verdict and the filed run's, and a
     # refused ingest is never green.
     return _axi().verb_exit(runner_exit, resp)
+
+
+def _leaked_run_exit(verb, result, project_dir, agent, run_id, *, tier, release,
+                     framework, warnings, artifact="surefire reports"):
+    """The exit of a run whose runner wrote no report this client can file:
+    when its hermetic run caught a tripwire hit, the run is filed with its
+    leaks through the shared `emit_leaked_run` and its envelope written, so
+    the leak is never lost. None when it caught none (nothing is sent)."""
+    return _axi().emit_leaked_run(
+        result, post_fn=_post, stack=_STACK,
+        project_key=_project_key(project_dir),
+        agent_id=agent, run_id=run_id, tier=tier, context=_run_context(),
+        release=release, framework=framework, warnings=warnings,
+        no_report=_axi().no_report_warning(
+            verb, artifact, result.returncode,
+            getattr(result, "stdout", None) or ""),
+        emit_ingest=lambda resp, found: _emit_run_axi(
+            verb, resp, project_dir, agent, ok=False, warnings=found))
 
 
 def _fresh(paths, since):
@@ -1497,6 +1527,8 @@ def cmd_e2e(args):
     -Pe2e` (failsafe IT / @QuarkusIntegrationTest), optionally native. No
     coverage. Optional docker compose lifecycle. With no declared profile the
     verb has nothing to run and refuses (`tier-run-undeclared`)."""
+    # Also refused at dispatch (`run_verb`); repeated here for a direct call.
+    _axi().refuse_hermetic_with_docker(args)
     declared = _read_declared_profile(args, "e2e")
     if not declared:
         raise _undeclared_tier(args, "e2e")
@@ -1663,9 +1695,13 @@ def _regression_run(args, identity=None, verb="regression",
                                                 reports_dir),
                                  identity, console.poster)
             preflight_warnings += run_warnings
-        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None), observer)
     except _axi().RunAbandoned as abandoned:
         console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
@@ -1684,6 +1720,14 @@ def _regression_run(args, identity=None, verb="regression",
                                                 reports_dir)
     dirs = _dirs_with_xml(_run_read_dirs(maven_dir, None, ("surefire", "failsafe"),
                                          reports_dir))
+    # A run that caught a tripwire hit is filed whatever it wrote: its reports
+    # when it wrote any, else the hits alone.
+    leaked = bool(_axi().pending_hermetic_run_leaks())
+    if leaked and not dirs:
+        return _leaked_run_exit(verb, result, project_dir, args.agent, run_id,
+                                tier="regression", release=release,
+                                framework=console.framework,
+                                warnings=preflight_warnings)
     if not dirs:
         print("[regression] no surefire/failsafe reports — capturing compile output",
               file=sys.stderr)
@@ -1696,7 +1740,7 @@ def _regression_run(args, identity=None, verb="regression",
         return _axi().verb_exit(runner_exit, {"ok": rc == 0})
 
     _warn_if_stale(dirs)
-    if _ran_nothing(result, dirs):
+    if not leaked and _ran_nothing(result, dirs):
         return _axi().emit_ran_nothing(
             verb, "surefire reports", result.returncode,
             getattr(result, "stdout", None) or "", run_id, preflight_warnings,
@@ -1803,9 +1847,13 @@ def _test_run(args, tier, project_dir, identity):
                                                 ("surefire",), reports_dir),
                                  identity, console.poster)
             preflight_warnings = list(preflight_warnings) + run_warnings
-        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None), observer)
     except _axi().RunAbandoned as abandoned:
         console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned("test", _project_key(project_dir),
@@ -1825,6 +1873,14 @@ def _test_run(args, tier, project_dir, identity):
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
     dirs = _dirs_with_xml(_run_read_dirs(maven_dir, getattr(args, "module", None),
                                          ("surefire",), reports_dir))
+    # A run that caught a tripwire hit is filed whatever it wrote: its reports
+    # when it wrote any, else the hits alone.
+    leaked = bool(_axi().pending_hermetic_run_leaks())
+    if leaked and not dirs:
+        return _leaked_run_exit("test", result, project_dir, args.agent, run_id,
+                                tier=tier, release=release,
+                                framework=console.framework,
+                                warnings=preflight_warnings)
     if not dirs:
         # No reports → tests didn't compile. Ingest the build output as compile.
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common,
@@ -1832,7 +1888,7 @@ def _test_run(args, tier, project_dir, identity):
         # The runner's exit decides, never the compile ingest's 0.
         return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
-    if _ran_nothing(result, dirs):
+    if not leaked and _ran_nothing(result, dirs):
         return _axi().emit_ran_nothing(
             "test", "surefire reports", result.returncode,
             getattr(result, "stdout", None) or "", run_id,
@@ -2168,7 +2224,9 @@ def _gate_regression_args(args):
         # The gate's declaration check, and the health it read, carry over:
         # the regression it runs reads neither again.
         console_checked=getattr(args, "console_checked", None),
-        console_health=getattr(args, "console_health", None))
+        console_health=getattr(args, "console_health", None),
+        # The gate's own suite runs hermetically when the gate was asked to.
+        hermetic=bool(getattr(args, "hermetic", False)))
 
 
 # --------------------------------------------------------------------------- #
@@ -2940,6 +2998,7 @@ def main():
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
     _add_project_args(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     # ── CR-CRU-030 fleet-uniform verbs ──────────────────────────────────────
@@ -2953,6 +3012,7 @@ def main():
     _add_project_args(te)
     _add_log_arg(te)
     _add_reports_arg(te)
+    _axi().add_hermetic_arg(te)
     te.set_defaults(func=cmd_test)
 
     ck = sub.add_parser("check", help="CHECK gate: mvn clean test-compile → ingest /api/v2/runs/compile on failure (§S2).")

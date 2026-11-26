@@ -1,6 +1,6 @@
 # CR-CRU-270 — a run can be hermetic, behind a tripwire
 
-**Status:** PENDING · filed 2026-11-21 (user ruling 2026-11-15: the leak-census tripwire becomes a standing guard —
+**Status:** COMPLETED (shipped 2026-11-27 on develop) · filed 2026-11-21 (user ruling 2026-11-15: the leak-census tripwire becomes a standing guard —
 Crucible's own CI got it in 0.4.0, CR-CRU-263, and a 0.5.0 CR offers it to every project as a client feature; promised
 to Model B for 0.5.0 in Sandesh #1621) · revised 2026-11-26 after gap analysis and user rulings Q1–Q4.
 **Type:** feature
@@ -52,9 +52,15 @@ working tree:
 - operator registry variables unset (`CRUCIBLE_PROJECT_KEY`, `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`,
   `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`, `PROJECT_STACKS`, `KNOWLEDGE_CATEGORY`);
 - `DOCKER_HOST=unix:///nonexistent`;
-- standard read-only/local toolchain variables preserved when present (matching `scripts/hermetic/run.sh`:
-  `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME`, `ARDUINO_DIRECTORIES_DATA`, `GOROOT`, `GOPATH`,
-  `GOMODCACHE`, `GOCACHE`), plus any extra variable names declared in `[hermetic] allow_env` in `crucible.toml`.
+- the toolchain variables set to `scripts/hermetic/run.sh`'s defaults whenever they are unset, before `HOME` is
+  redirected (Ruling SF-2). The client path and the standalone CLI share one helper for this:
+  - `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME` and `ARDUINO_DIRECTORIES_DATA` point at the original
+    home's stores;
+  - `GOROOT` comes from `go env` when `go` is on `PATH`;
+  - `GOPATH`, `GOMODCACHE` and `GOCACHE` sit under the working tree's `.cache/test-suite`.
+
+  A value already set is kept. Any extra variable names declared in `[hermetic] allow_env` in `crucible.toml` are
+  passed through.
 
 **Gate behaviour (`pre-merge-gate --hermetic`, CR-CRU-274 Ruling Q4):**
 
@@ -107,9 +113,12 @@ allow_env = ["MY_TOOLCHAIN_CACHE"]     # optional list of non-empty env-var name
   `cwd`, `cmd`, `request` (first HTTP line, if any), and `test` (optional).
 - Test attribution: the tripwire inspects `/proc/<pid>/environ` for `CRUCIBLE_CURRENT_TEST` and `PYTEST_CURRENT_TEST`
   (stripping pytest's `" (call)"` / `" (setup)"` suffix when present). `clients/subtest_runner.py` sets
-  `CRUCIBLE_CURRENT_TEST` in `startTest` and clears it in `stopTest`, giving exact test attribution for Python
-  `unittest` and `pytest`. Runners that do not set either variable leave `test` absent/null and fall back cleanly to
-  `cmd` + `pid`.
+  `CRUCIBLE_CURRENT_TEST` in `startTest` and clears it in `stopTest`, and writes the current test's id to a
+  current-test file that the tripwire reads as a fallback. `/proc/<pid>/environ` shows only a process's environment
+  at exec, so a variable a runner sets in-process is not visible there. This gives exact test attribution for Python
+  `unittest` runs through the fleet's runner (Ruling SF-3). A pytest run is not named by test: pytest sets
+  `PYTEST_CURRENT_TEST` in-process, so the tripwire cannot read it. The python client drives unittest only, so pytest
+  is already a known client gap. Runners that expose neither leave `test` absent and fall back to `cmd` + `pid`.
 
 **Wire and board storage (Ruling Q2 — server `leaks[]` + failing `tripwire` suite):**
 
@@ -236,3 +245,44 @@ From the gap analysis and the user's answers:
 - **Q4 (S5 — retiring `scripts/hermetic/` & CI):** One shared stdlib engine in `clients/` (`_crucible_hermetic.py` +
   `_crucible_tripwire.py`) used by both `--hermetic` on every client and directly by CI (`release.yml`) without a
   board; delete `scripts/hermetic/run.sh` and `tripwire.py`; keep `scripts/hermetic/unit-check.sh` and its hooks.
+
+### Rulings after VERIFY (2026-11-27, cycle 1033)
+
+- **SF-2 (S1 — toolchain defaults):** a client `--hermetic` run applies the same toolchain defaults as the standalone
+  CLI (`run.sh`'s), through one shared helper. Without them a stock install's rust, go, arduino and bun-e2e runs
+  could not find their toolchains once `HOME` was redirected.
+- **SF-3 (S3 — pytest attribution):** the spec is corrected rather than extended. Exact test names cover unittest
+  runs through the fleet's runner; a pytest hit falls back to `cmd` + `pid`.
+
+## Close-out (2026-11-27)
+
+Plan 278.
+
+- **Cycle 1031, RED/GREEN (server leaks, S3/AC6):** 26 bun unit tests, 25 failing for the spec's reasons and one pin.
+  GREEN added `LeakRecord`, the `leaks` validation (400, nothing stored) and `fileTripwireLeaks` ahead of
+  `fileRunnerExit` on `/runs` and `/runs/parsed`, stored in `events.payload` with no migration.
+- **Cycle 1032, RED/GREEN (hermetic engine, S1–S5):** 84 failing RED tests across unit, end-to-end and shipping
+  modules.
+  - The first GREEN agent died on a model-provider refusal, and a fresh agent finished from its draft.
+  - Two RED-test defects were fixed with the orchestrator's approval: `TOON.loads` became `TOON.decode`, and
+    `allow_env` now goes inside the existing `[hermetic]` table.
+  - GREEN added `_crucible_hermetic.py` and `_crucible_tripwire.py` and `--hermetic` on all six clients and the gate.
+    It deleted `run.sh` and `tripwire.py`, moved CI's five calls to the new CLI, and updated the docs.
+- **Cycle 1033, VERIFY:** FAIL on two must-fixes: leaks were lost when a runner wrote no report, and CR ids were in
+  added test lines. The user ruled SF-2 (apply the toolchain defaults on the client path) and SF-3 (correct the
+  pytest attribution in the spec), recorded above.
+- **Cycle 1034, FIX:**
+  - MF-1 was wider than reported: the streamed path lost leaks too, and both paths now file them.
+  - Leaks are scoped to the run that caught them.
+  - One shared toolchain-defaults helper.
+  - A refused run is proven to start and file nothing.
+  - An unparseable `crucible.toml` is refused, naming the file.
+  - A hung tripwire drain exits 95.
+  - Bun's repeated preflight calls are dropped.
+  - Two text-checking tests are deleted.
+- **Pre-merge gate (cycle 1034):** 13,662 passed and 0 failed in about 24 minutes. By suite: bun 5,142, python unit
+  2,723, python integration 5,797.
+- **Left open:**
+  - The Maven, Arduino and pytest no-report paths share the tested helper but have no end-to-end test, since those
+    tools are not on this machine.
+  - The CI workflow change (AC8) is proven only by the first CI run after the merge.

@@ -861,6 +861,11 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         # And so is the board module.
         shutil.copy(CLIENT_SOURCE_DIR / "_crucible_board.py",
                     cls.clients_dir / "_crucible_board.py")
+        # And so are the hermetic runner and its tripwire.
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_hermetic.py",
+                    cls.clients_dir / "_crucible_hermetic.py")
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_tripwire.py",
+                    cls.clients_dir / "_crucible_tripwire.py")
         shutil.copy(CLIENT_SOURCE_DIR / "toon.py", cls.clients_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken

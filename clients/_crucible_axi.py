@@ -925,6 +925,11 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
     refused = take_refused_ingest_warnings()
     ok = False if refused else ok
     warnings = list(warnings) + refused
+    hermetic_leaks = current_hermetic_leaks()
+    if hermetic_leaks:
+        ok = False
+        if "leaks" not in result_fields:
+            result_fields = {**result_fields, "leaks": hermetic_leaks}
     board_help = take_unknown_project_help()
     if board_help is not None and not ok:
         result_fields = {**result_fields, "help": board_help}
@@ -2730,7 +2735,14 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     runner started ran nothing, so it records nothing."""
     forget_ingested_run()
     forget_unknown_project_refusal()
+    forget_hermetic_leaks()
     try:
+        # A `--hermetic` verb is refused here, before anything runs or is
+        # opened on the board, when it cannot be honoured.
+        if getattr(args, "hermetic", False):
+            hermetic_preflight(
+                args, project_dir_fn(args) if project_dir_fn is not None
+                else getattr(args, "project_dir", None))
         code = func(args)
     except AgentIdentityRequired:
         return emit_agent_identity_hard_stop(
@@ -2774,6 +2786,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
             offers_release=hasattr(args, "release"))
     except BoardUndeclared as refusal:
         return emit_board_undeclared_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except HermeticRefused as refusal:
+        return emit_hermetic_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn,
                                getattr(args, "agent", None)))
@@ -6582,6 +6599,11 @@ def post_ingest(post_fn, path, payload, *, stack, release=None, framework=None):
                if framework else {}), **({"release": release} if release else {})}
     if path in RUN_INGEST_PATHS:
         _ingested_run_tier = (payload or {}).get("tier")
+        # A run files only the hits its own hermetic run caught, once: the
+        # next run in this process starts with none.
+        hermetic_leaks = take_hermetic_run_leaks()
+        if hermetic_leaks and "leaks" not in payload:
+            payload = {**payload, "leaks": hermetic_leaks}
     elif path == COMPILE_INGEST_PATH:
         _ingested_compile = True
     run_id = (payload or {}).get("runId")
@@ -6830,6 +6852,7 @@ def add_tier_verbs(sub, funcs, *, declares, parents=(), add_args=()):
         # inert, and a refusal naming a flag its own verb rejects (AC14b).
         for adder in (wired.add_args if wired is not None else declares.add_args):
             adder(tp)
+        add_hermetic_arg(tp)
         tp.set_defaults(func=(wired.func if wired is not None
                               else declared_tier_run(tier, funcs, declares)))
 
@@ -6945,7 +6968,8 @@ def _python_suite_argv(tokens):
 _SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
 
 
-def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None):
+def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None,
+                        hermetic=False):
     """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
     `command` declares, or None when this declaration cannot be dispatched.
 
@@ -6985,6 +7009,8 @@ def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None)
         argv += ["--release", release]
     if argv and cycle is not None:
         argv += ["--cycle", str(cycle)]
+    if argv and hermetic:
+        argv += [HERMETIC_FLAG]
     return argv
 
 
@@ -7687,6 +7713,18 @@ _machine_board = _BOARD._machine_board
 emit_board_undeclared_hard_stop = _BOARD.emit_board_undeclared_hard_stop
 report_board_undeclared = _BOARD.report_board_undeclared
 _reexport_module(_BOARD)
+_HERMETIC = _load_sibling_module("_crucible_hermetic.py", "_hermetic")
+HERMETIC_FLAG = _HERMETIC.HERMETIC_FLAG
+HermeticRefused = _HERMETIC.HermeticRefused
+add_hermetic_arg = _HERMETIC.add_hermetic_arg
+emit_hermetic_refused_hard_stop = _HERMETIC.emit_hermetic_refused_hard_stop
+forget_hermetic_leaks = _HERMETIC.forget_hermetic_leaks
+hermetic_preflight = _HERMETIC.hermetic_preflight
+refuse_hermetic_with_docker = _HERMETIC.refuse_hermetic_with_docker
+current_hermetic_leaks = _HERMETIC.current_hermetic_leaks
+pending_hermetic_run_leaks = _HERMETIC.pending_hermetic_run_leaks
+take_hermetic_run_leaks = _HERMETIC.take_hermetic_run_leaks
+_reexport_module(_HERMETIC)
 
 
 # The gated-run bracket in flight in this process (`gated_run`): its trap, and

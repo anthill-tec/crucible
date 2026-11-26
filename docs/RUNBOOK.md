@@ -440,7 +440,9 @@ command = ["scripts/hermetic/unit-check.sh"]
 - A malformed table (`command` missing, not a list, empty, or holding an empty or non-string entry; `name` not a
   non-empty string) stops the gate at `stage: unit-check`, with an `error` naming the file and the field. Nothing
   runs.
-- The command runs with the gate's environment unchanged: the client adds no variable and loads no hook.
+- The command runs with the gate's environment unchanged: the client adds no variable and loads no hook. The one
+  exception is `pre-merge-gate --hermetic`, which runs the stage inside the hermetic namespace (see Hermetic runs
+  below).
 
 Exit 0 lets the gate go on. Any other exit stops it: the gate's one envelope reads `ok: false`, `stage: unit-check`,
 the command's `exit`, and the warning `unit-check-gate-abort`, with a `help` line naming the stage and its command:
@@ -460,7 +462,89 @@ new checkout adds the table itself, beside `[lint]`:
 command = ["scripts/hermetic/unit-check.sh"]
 ```
 
-CI's `test-bun` and `test-python` jobs run the same script, one tier each, inside `scripts/hermetic/run.sh`.
+CI's `test-bun` and `test-python` jobs run the same script, one tier each, inside the standalone hermetic wrapper:
+`python3 clients/_crucible_hermetic.py --log-dir <dir> --port 3849 --port 3850 -- scripts/hermetic/unit-check.sh bun`.
+
+## Hermetic runs
+
+Add `--hermetic` to any client's tier verb (`unit`, `module`, `integration`, `e2e`, `regression`, `bdd`), to `test`,
+or to `pre-merge-gate`. The test runner then runs behind a tripwire, so a test that reaches the operator's board, home
+or network turns the run red. Every client accepts the flag: python, bun, rust, mvn, arduino and go.
+
+The client itself stays outside the namespace, so it can still reach the board. Only the runner and the tripwire run
+inside it, in the project's working tree:
+
+- A new unprivileged user and network namespace (`unshare --map-current-user --keep-caps -n`). Only `lo` is up, so
+  there is no external route. Every capability is dropped (`setpriv --ambient-caps -all --inh-caps -all
+  --bounding-set -all --no-new-privs`).
+- `HOME` is a fresh empty directory, and `DOCKER_HOST=unix:///nonexistent`.
+- These variables are unset:
+  - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`;
+  - the operator registry variables: `CRUCIBLE_PROJECT_KEY`, `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`,
+    `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`, `PROJECT_STACKS` and `KNOWLEDGE_CATEGORY`.
+- The toolchain variables get the same defaults as the standalone CLI, applied before `HOME` is redirected. A value
+  already set is kept:
+  - `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME` and `ARDUINO_DIRECTORIES_DATA` point at your original
+    home's stores (`~/.cache/ms-playwright`, `~/.rustup`, `~/.cargo` and `~/.arduino15`);
+  - `GOROOT` comes from `go env GOROOT` when `go` is on `PATH`;
+  - `GOPATH`, `GOMODCACHE` and `GOCACHE` sit under the working tree's `.cache/test-suite`.
+- The names in `[hermetic] allow_env` are passed through.
+
+**Tripwire ports.** The tripwire listens before the runner starts. It guards the union of these ports, with
+duplicates removed:
+
+1. the port in the project's `[client] url`;
+2. the port in the install's `[client] url`;
+3. the shipped `default_board_port`, 3849, from `[hermetic]` in the distribution's `clients/crucible.toml`;
+4. every entry in the project's `[hermetic] tripwires`.
+
+A bare port is guarded on both `127.0.0.1` and `[::1]`. A `"host:port"` entry guards that one socket. The tripwire
+answers every connection `503`.
+
+```toml
+[hermetic]
+tripwires = [5432, "127.0.0.1:6379"]   # optional: extra ports or "host:port" sockets
+allow_env = ["MY_TOOLCHAIN_CACHE"]     # optional: extra variable names passed through
+```
+
+The table is read from the project's `crucible.toml`, else the install's. It is checked before anything runs. A
+`crucible.toml` that does not parse is refused with an `error` naming the file. A malformed value is refused with an
+`error` naming the file and the field. Malformed means:
+
+- a `tripwires` entry that is not a port in `1..65535` or a `host:port`;
+- an `allow_env` entry that is not a non-empty string;
+- a `default_board_port` outside `1..65535`.
+
+**Leak records.** Each connection the tripwire catches becomes a leak record. A record has these fields:
+
+- `endpoint` and `port`;
+- the `test` that was running, when the runner names it: Python `unittest` through `subtest_runner.py`. A pytest run
+  sets its current test in-process, where the tripwire cannot read it, so a pytest hit falls back to `cmd` and `pid`;
+- the `pid` and `cmd` of the connecting process;
+- the first `request` line.
+
+The run is filed with its own `leaks`: a later suite in the same invocation never inherits them. The board adds a
+failing `tripwire` suite with one case per hit, so the run is red. The envelope carries `leaks`, reads `ok: false`,
+and the client exits non-zero. A runner that crashed before it reported anything (for example a test module that
+reached the board at import time) still has its hits filed: the run is filed on `/api/v2/runs/parsed` with no tests
+of its own and its `leaks`.
+
+**The gate.** Under `pre-merge-gate --hermetic`:
+
+- `check` and `[lint]` run outside the namespace.
+- `[unit-check]` runs inside it. A hit there stops the gate at `stage: unit-check`: the envelope reads `ok: false`,
+  carries the `leaks`, and has the warning `unit-check-gate-abort`. No regression runs.
+- Each test suite the gate runs, its own or a sibling client's, receives `--hermetic`. Each one files its own leaks.
+
+**Linux only.** `--hermetic` needs Linux, `unshare`, `setpriv` and `ip` on `PATH`, and a kernel that allows
+unprivileged user namespaces. On Ubuntu 24.04 and later that means
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. When any of these is missing, the client refuses
+before it runs or files anything. The `ok: false` envelope names the cause and the fix. `--hermetic` is never ignored
+silently. On Maven, `e2e --with-docker --hermetic` is refused before Docker starts.
+
+**Without a board.** Run `python3 clients/_crucible_hermetic.py --log-dir <dir> [--port <p>…] -- <command…>`. It
+exits 99 on a tripwire hit and 90–95 on a setup failure. Otherwise it exits with the command's own status. Its log is
+in `<dir>/tripwire.log` (`scripts/hermetic/README.md`).
 
 ## Rust tier verbs
 
@@ -836,7 +920,7 @@ python3 -m unittest discover -s tests/client -t .
 
 CI runs the same two directories as separate steps, `tests/client/unit` then
 `tests/client/integration`, each with the repo's `.venv/bin/python` inside the
-hermetic wrapper (`scripts/hermetic/README.md`).
+hermetic wrapper, `clients/_crucible_hermetic.py` (`scripts/hermetic/README.md`).
 
 Those two layers protect you from code that plays by the rules. A hardcoded
 path, an `expanduser` evaluated before the environment is patched, or a
