@@ -1046,11 +1046,15 @@ def _tier_run(args, goals, label, kinds, project_dir, identity,
             # warnings, where the pre-flight's would.
             if release:
                 run_warnings = [_axi().release_run_note(release)] + run_warnings
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id), \
-                console.observer(narrator) as observer:
+        with (_axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
             # The console is captured on both paths: an empty selection is
             # read from it, and stdout carries the envelope alone.
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None),
                                  observer, capture=True)
     except _axi().RunAbandoned as abandoned:
         # What maven wrote before the signal reaches the board before the run
@@ -1497,6 +1501,8 @@ def cmd_e2e(args):
     -Pe2e` (failsafe IT / @QuarkusIntegrationTest), optionally native. No
     coverage. Optional docker compose lifecycle. With no declared profile the
     verb has nothing to run and refuses (`tier-run-undeclared`)."""
+    # Also refused at dispatch (`run_verb`); repeated here for a direct call.
+    _axi().refuse_hermetic_with_docker(args)
     declared = _read_declared_profile(args, "e2e")
     if not declared:
         raise _undeclared_tier(args, "e2e")
@@ -1663,9 +1669,13 @@ def _regression_run(args, identity=None, verb="regression",
                                                 reports_dir),
                                  identity, console.poster)
             preflight_warnings += run_warnings
-        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None), observer)
     except _axi().RunAbandoned as abandoned:
         console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
@@ -1803,9 +1813,13 @@ def _test_run(args, tier, project_dir, identity):
                                                 ("surefire",), reports_dir),
                                  identity, console.poster)
             preflight_warnings = list(preflight_warnings) + run_warnings
-        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
-            result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 observer)
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped,
+              console.observer(narrator) as observer):
+            result = _run_logged(wrapped.cmd, maven_dir, wrapped.env,
+                                 getattr(args, "log", None), observer)
     except _axi().RunAbandoned as abandoned:
         console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned("test", _project_key(project_dir),
@@ -2168,7 +2182,9 @@ def _gate_regression_args(args):
         # The gate's declaration check, and the health it read, carry over:
         # the regression it runs reads neither again.
         console_checked=getattr(args, "console_checked", None),
-        console_health=getattr(args, "console_health", None))
+        console_health=getattr(args, "console_health", None),
+        # The gate's own suite runs hermetically when the gate was asked to.
+        hermetic=bool(getattr(args, "hermetic", False)))
 
 
 # --------------------------------------------------------------------------- #
@@ -2940,6 +2956,7 @@ def main():
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
     _add_project_args(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     # ── CR-CRU-030 fleet-uniform verbs ──────────────────────────────────────
@@ -2953,6 +2970,7 @@ def main():
     _add_project_args(te)
     _add_log_arg(te)
     _add_reports_arg(te)
+    _axi().add_hermetic_arg(te)
     te.set_defaults(func=cmd_test)
 
     ck = sub.add_parser("check", help="CHECK gate: mvn clean test-compile → ingest /api/v2/runs/compile on failure (§S2).")

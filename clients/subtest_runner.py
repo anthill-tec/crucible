@@ -57,6 +57,11 @@ _ErrorHolder: Any = unittest.suite._ErrorHolder  # pyright: ignore[reportAttribu
 
 # The environment variable naming the stream file.
 STREAM_VAR = "CRUCIBLE_STREAM"
+# Optional file where the runner publishes the currently running test id for
+# hermetic tripwire attribution.
+CURRENT_TEST_FILE_VAR = "CRUCIBLE_CURRENT_TEST_FILE"
+# The running test's id, for any process a test starts.
+CURRENT_TEST_VAR = "CRUCIBLE_CURRENT_TEST"
 
 # The directory the runner was started in, read once as it loads (before any
 # test runs and can move the working directory): a case's `file` is shown
@@ -223,6 +228,33 @@ class StreamingTestResult(unittest.TextTestResult):
         self._case_mark = 0.0
         self._run_started = 0.0
         self._counts = {"total": 0, "passed": 0, "failed": 0, "pending": 0}
+        self.current_test_file: str | None = None
+
+    def _publish_current_test(self, test_id: str) -> None:
+        """Name the running test (``""`` between tests) for a hermetic run's
+        tripwire: in ``CRUCIBLE_CURRENT_TEST`` for any process the test
+        starts, and in the current-test file, which the tripwire reads for an
+        in-process connection (``/proc/<pid>/environ`` never shows a
+        ``putenv`` made after start)."""
+        if test_id:
+            os.environ[CURRENT_TEST_VAR] = test_id
+        else:
+            os.environ.pop(CURRENT_TEST_VAR, None)
+        path = self.current_test_file
+        if not path:
+            return
+        tmp = f"{path}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(test_id)
+                fh.flush()
+            os.replace(tmp, path)
+        except OSError as exc:
+            # Attribution only: the run goes on, without naming tests to the
+            # tripwire, and says so once.
+            self.current_test_file = None
+            sys.stderr.write(f"subtest_runner: cannot publish the running "
+                             f"test to {path}: {exc}\n")
 
     # -- the run --------------------------------------------------------
 
@@ -244,9 +276,11 @@ class StreamingTestResult(unittest.TextTestResult):
         self._outcome = None
         self._duration = None
         self._test_started = self._case_mark = time.perf_counter()
+        self._publish_current_test(test.id())
         super().startTest(test)
 
     def stopTest(self, test: Any) -> None:
+        self._publish_current_test("")
         if test is self._current and self._outcome is not None:
             status, failure = self._outcome
             duration = (self._duration * 1000.0 if self._duration is not None
@@ -370,7 +404,10 @@ class StreamingTestResult(unittest.TextTestResult):
         return max(0.0, (time.perf_counter() - start) * 1000.0)
 
 
-def streaming_runner_class(events: EventStream) -> type:
+def streaming_runner_class(
+    events: EventStream,
+    current_test_file: str | None = None,
+) -> type:
     """A ``TextTestRunner`` building a ``StreamingTestResult`` that writes to
     ``events``, with the suite's ``countTestCases()`` as its total."""
 
@@ -391,6 +428,7 @@ def streaming_runner_class(events: EventStream) -> type:
             result = cast(StreamingTestResult, super()._makeResult())
             result.events = events
             result.total = self._total
+            result.current_test_file = current_test_file
             return result
 
     return StreamingTestRunner
@@ -401,10 +439,16 @@ def main() -> None:
     ``CRUCIBLE_STREAM`` names a file."""
     _restore_module_search_path()
     path = os.environ.pop(STREAM_VAR, None) or None
+    current_test_file = os.environ.pop(CURRENT_TEST_FILE_VAR, None) or None
     events = EventStream(path)
     try:
-        unittest.main(module=None, argv=sys.argv,
-                      testRunner=streaming_runner_class(events))
+        unittest.main(
+            module=None,
+            argv=sys.argv,
+            testRunner=streaming_runner_class(
+                events, current_test_file=current_test_file
+            ),
+        )
     finally:
         events.close()
 

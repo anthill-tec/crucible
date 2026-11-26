@@ -960,8 +960,11 @@ def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
                     agent, run_id, stream_path, NEXTEST_CODEC,
                     _axi()._ingest_body_limit(health), listed_total)
             print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
-            result = _run_logged(run_cmd, project_dir, {**run_env, _STREAM_SWITCH: "1"},
-                                 log_path, capture=True, stdout_path=stream_path)
+            with _axi().hermetic_wrap(run_cmd, {**run_env, _STREAM_SWITCH: "1"},
+                                      enabled=bool(getattr(args, "hermetic", False)),
+                                      project_dir=project_dir) as wrapped:
+                result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
+                                     log_path, capture=True, stdout_path=stream_path)
     except _axi().RunAbandoned as abandoned:
         # What the run streamed before the signal reaches the board first.
         _finish_relay(relay, _INTERRUPTED_FINISH_SECONDS)
@@ -1459,8 +1462,12 @@ def _test_run(args, tier, kinds, profile, project_dir, identity):
                + (["--no-fail-fast"] if args.no_fail_fast else []))
         print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
         try:
-            with _axi().abandon_trap(None):
-                result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+            with (_axi().abandon_trap(None),
+                  _axi().hermetic_wrap(cmd, env,
+                                       enabled=bool(getattr(args, "hermetic", False)),
+                                       project_dir=project_dir) as wrapped):
+                result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
+                                     getattr(args, "log", None))
         except _axi().RunAbandoned as abandoned:
             return _axi().emit_run_abandoned(verb, _project_key(project_dir), None,
                                              None, abandoned, [], post_fn=_post)
@@ -2391,6 +2398,8 @@ def cmd_pre_merge_gate(args):
         keep_target=getattr(args, "keep_target", False),
         release=getattr(args, "release", None),
         cycle=getattr(args, "cycle", None),
+        # The gate's own suite runs hermetically when the gate was asked to.
+        hermetic=bool(getattr(args, "hermetic", False)),
     )
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own workspace regression
     # always runs, and every declared profile it covers is a SUBSET of that run
@@ -3169,6 +3178,7 @@ def main():
     _add_project_dir_arg(t)
     _add_log_arg(t)
     _add_reports_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     c = sub.add_parser(
@@ -3379,6 +3389,7 @@ def main():
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
     _add_project_dir_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     e2e = sub.add_parser(

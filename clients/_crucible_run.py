@@ -1996,8 +1996,13 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
             artifact=artifact, emit=emit, no_report_warning=no_report_warning,
             zero_discovery=zero_discovery, stack=stack, gate=gate)
     count, total, stated, _ran = stream_counts(stream_path, codec)
+    # A hermetic run's tripwire hits are never lost: a run that caught one is
+    # always closed by its stream, which files the hits (`post_ingest`), even
+    # when its runner reported nothing.
+    leaked = bool(_core.current_hermetic_leaks())
     zero = (zero_discovery(result)
-            if count == 0 and zero_discovery is not None else None)
+            if count == 0 and zero_discovery is not None and not leaked
+            else None)
     if zero is not None:
         warning, help_step = zero
         emit(False, {"help": [help_step]},
@@ -2005,7 +2010,8 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
                  run_id, artifact, post_fn=post_fn, project_key=project_key,
                  agent_id=agent_id), None)
         return 1
-    if ran_nothing(result.returncode, count if total is not None else None):
+    if not leaked and ran_nothing(result.returncode,
+                                  count if total is not None else None):
         return emit_ran_nothing(
             verb, artifact, result.returncode, result.stdout or "", run_id,
             warnings, post_fn=post_fn, project_key=project_key,
@@ -2015,7 +2021,8 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     # nothing of the stream held by the board too; a stream the board holds
     # (a `run-start` the runner wrote before it died) is closed as a stream.
     no_test_end = bool(result.returncode) and count == 0
-    wrote_no_test = no_test_end and held == 0 and ingest_compile is not None
+    wrote_no_test = (no_test_end and held == 0 and ingest_compile is not None
+                     and not leaked)
     coverage_paths = []
     if collect_coverage is not None and not wrote_no_test:
         coverage_paths, missing = collect_coverage()

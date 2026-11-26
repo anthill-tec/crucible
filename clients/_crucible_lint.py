@@ -460,6 +460,29 @@ def run_unit_check_command(spec, run_dir):
     return result.stdout or "", lint_exit_code(result.returncode)
 
 
+def _run_unit_check_hermetic(spec, run_dir, project_dir):
+    """Run the declared unit-check command inside the hermetic namespace and
+    tripwire, returning `(output, exit_code, leaks)`."""
+    word = spec["command"][0]
+    try:
+        executable = resolve_lint_command(word, run_dir, os.environ.get("PATH"))
+    except LintRefused as refusal:
+        raise LintRefused(f"the unit-check command {word!r} was not found "
+                          f"-- {refusal}") from refusal
+    cmd = [executable, *spec["command"][1:]]
+    with _core.hermetic_wrap(cmd, os.environ, enabled=True,
+                             project_dir=project_dir, record=False) as wrapped:
+        try:
+            result = subprocess.run(
+                wrapped.cmd, cwd=run_dir, env=wrapped.env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                check=False)
+        except OSError as error:
+            raise LintRefused(f"the unit-check command {word!r} could not be "
+                              f"run: {error}") from error
+    return result.stdout or "", lint_exit_code(result.returncode), wrapped.leaks
+
+
 def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
                           run_dir=None, carried_warnings=()):
     """A gate's fail-fast unit-check stage, run right after its lint stage in
@@ -471,7 +494,9 @@ def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
     gate the same way, with the `error` naming it; nothing runs."""
     if getattr(args, "skip_unit_check", False):
         return None
+    hermetic = bool(getattr(args, "hermetic", False))
     spec = None
+    leaks = []
     try:
         spec = resolve_unit_check_declaration()
         if spec is None:
@@ -480,19 +505,25 @@ def gate_unit_check_stage(args, project_dir, ops, *, agent_id, verb,
                 "detail": (f"{verb} skipped its unit-check stage: nothing is "
                            f"declared in a [{UNIT_CHECK_TABLE}] table")})
             return None
-        output, exit_code = run_unit_check_command(spec, run_dir or project_dir)
+        if hermetic:
+            output, exit_code, leaks = _run_unit_check_hermetic(
+                spec, run_dir or project_dir, project_dir)
+        else:
+            output, exit_code = run_unit_check_command(
+                spec, run_dir or project_dir)
     except LintRefused as refusal:
         return _emit_gate_unit_check_abort(
             ops, project_dir, agent_id, verb, spec, 1,
             {"error": str(refusal)}, carried_warnings)
     print(f"[crucible] {verb}: unit-check stage {spec['name']} exit={exit_code}",
           file=sys.stderr)
-    if exit_code == 0:
+    if exit_code == 0 and not leaks:
         return None
     sys.stderr.write(output)
+    extra_fields = {"leaks": leaks} if leaks else {}
     return _emit_gate_unit_check_abort(ops, project_dir, agent_id, verb,
-                                       spec, exit_code, {},
-                                       carried_warnings)
+                                       spec, exit_code or _core.HERMETIC_EXIT_HIT,
+                                       extra_fields, carried_warnings)
 
 
 def _unit_check_remedy(spec):

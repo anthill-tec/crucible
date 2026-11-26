@@ -1023,6 +1023,8 @@ def cmd_test(args, tier=None, verb="test"):
     project_dir = _resolve_project_dir(args.project_dir)
     # The runner is chosen, and refused, before anything reaches the board.
     runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
                           "gated test run starting",
@@ -1078,8 +1080,12 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # The runner's fallback line, once seen, rides every envelope below.
     watch = _FallbackWatch(narrator, runner)
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env,
+        with (_axi().ChildRunTiming() as timing,
+              _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
@@ -1160,6 +1166,8 @@ def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
     # The runner is chosen, and refused, before anything reaches the board.
     if runner is None:
         runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
@@ -1267,8 +1275,11 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # The runner's fallback line, once seen, rides every envelope below.
     watch = _FallbackWatch(narrator, runner)
     try:
-        with _axi().abandon_trap(run_id):
-            result = _run_logged(run_cmd, project_dir, env,
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(run_cmd, env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent,
@@ -1476,8 +1487,12 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
             agent, run_id, stream_path, STREAM_CODEC,
             _axi()._ingest_body_limit(health))
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, runner_env,
+        with (_axi().ChildRunTiming() as timing,
+              _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, runner_env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=project_dir) as wrapped):
+            result = _run_logged(wrapped.cmd, project_dir, wrapped.env,
                                  getattr(args, "log", None))
     except _axi().RunAbandoned as abandoned:
         # The tests the runner wrote before the signal reach the board
@@ -1631,6 +1646,8 @@ def cmd_pre_merge_gate(args):
     # The runner is chosen, and refused, before the check step and before
     # anything reaches the board.
     runner = _resolve_runner(args, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     # The gate files from its first step on (a failing py_compile files a
     # compile result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -1687,6 +1704,7 @@ def cmd_pre_merge_gate(args):
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
         release=getattr(args, "release", None), runner=runner,
+        hermetic=bool(getattr(args, "hermetic", False)),
     )
     # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
     # composed once for the fleet. This stack's surface enumerates none (the
@@ -2323,6 +2341,7 @@ def main():
     _add_runner_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -2397,6 +2416,7 @@ def main():
     _add_runner_arg(pmg)
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",

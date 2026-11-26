@@ -1212,6 +1212,17 @@ def _marked_test_script(package_dir):
     return script, targets[script].get("framework"), None
 
 
+def _hermetic_bun_cmd(cmd, *, is_bun_test=False):
+    """Prevent bun from auto-loading the working tree's `.env` during a
+    hermetic run so operator registry variables are not re-injected."""
+    if not cmd:
+        return cmd
+    out = [cmd[0], "--no-env-file", *cmd[1:]]
+    if is_bun_test and len(cmd) >= 2 and cmd[1] == "run":
+        out.append("--no-env-file")
+    return out
+
+
 def cmd_test(args, tier=None):
     """Targeted/whole-suite `bun test` → junit → ingest.
 
@@ -1225,6 +1236,8 @@ def cmd_test(args, tier=None):
     since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     name = getattr(args, "name", None)
     # A package declaring a key the table replaced is refused before
     # anything reaches the board.
@@ -1269,6 +1282,8 @@ def cmd_test(args, tier=None):
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
     cmd = _bun_test_cmd(bun, tests, junit_path, False, None, name=name)
+    if getattr(args, "hermetic", False):
+        cmd = _hermetic_bun_cmd(cmd, is_bun_test=True)
     env = os.environ.copy()
     print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
     # Capture output whenever an ingest may be needed: bun's JUnit reporter
@@ -1329,9 +1344,12 @@ def cmd_test(args, tier=None):
         try:
             with _axi().ChildRunTiming() as timing, _abandon_trap(run_id), \
                     _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(cmd, run_env,
+                                         enabled=bool(getattr(args, "hermetic", False)),
+                                         project_dir=project_dir) as wrapped, \
                     _console_observer(relay, reports_dir, narrator) as observer:
-                result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     observer)
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path, observer)
         except _axi().RunAbandoned as abandoned:
             # What the runner wrote before the signal reaches the board
             # before the run is aborted.
@@ -1437,6 +1455,8 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     agent = getattr(args, "agent", None)
     # A package declaring a key the table replaced is refused first, before
     # anything is posted, whatever script this run would take.
@@ -1563,9 +1583,15 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
             run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(
+                        _hermetic_bun_cmd(cmd, is_bun_test=(framework == DEFAULT_FRAMEWORK))
+                        if getattr(args, "hermetic", False) else cmd,
+                        run_env,
+                        enabled=bool(getattr(args, "hermetic", False)),
+                        project_dir=project_dir) as wrapped, \
                     _console_observer(relay, reports_dir, narrator) as observer:
-                result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     observer)
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path, observer)
         except _axi().RunAbandoned as abandoned:
             _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, args.agent,
@@ -1788,8 +1814,15 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
                     _project_key(project_dir), agent, run_id, stream_path,
                     codec, _axi()._ingest_body_limit(health))
         try:
-            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
-                result = _run_logged(cmd, package_dir, run_env, log_path)
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
+                    _axi().hermetic_wrap(
+                        _hermetic_bun_cmd(cmd, is_bun_test=(framework == DEFAULT_FRAMEWORK))
+                        if getattr(args, "hermetic", False) else cmd,
+                        run_env,
+                        enabled=bool(getattr(args, "hermetic", False)),
+                        project_dir=project_dir) as wrapped:
+                result = _run_logged(wrapped.cmd, package_dir, wrapped.env,
+                                     log_path)
         except _axi().RunAbandoned as abandoned:
             _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, agent, run_id,
@@ -1933,6 +1966,8 @@ def cmd_pre_merge_gate(args):
     # A package dir that cannot be run in is refused before the board is asked
     # anything.
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    if getattr(args, "hermetic", False):
+        _axi().prepare_hermetic_run(project_dir=project_dir)
     # A package declaring a key the table replaced is refused before the tsc
     # step, which files a compile result of its own.
     _refuse_old_keys(package_dir, "pre-merge-gate")
@@ -2070,6 +2105,7 @@ def _gate_regression_args(args):
         # CR-CRU-017 §S4 — the gate's own opt-out decision carries into the
         # regression it runs; the step must never re-decide it.
         no_lifecycle=getattr(args, "no_lifecycle", True),
+        hermetic=bool(getattr(args, "hermetic", False)),
     )
 
 
@@ -2086,7 +2122,8 @@ def _dispatch_gate_suite(args, suite):
     return (_axi().sibling_client_argv(suite.stack, suite.command,
                                        agent=args.agent,
                                        release=getattr(args, "release", None),
-                                       cycle=getattr(args, "cycle", None)),
+                                       cycle=getattr(args, "cycle", None),
+                                       hermetic=bool(getattr(args, "hermetic", False))),
             package_dir)
 
 
@@ -2944,6 +2981,7 @@ def main():
     _add_project_dir_arg(t)
     _add_log_arg(t)
     _add_no_lifecycle_arg(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -3021,6 +3059,7 @@ def main():
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
     _add_no_lifecycle_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",

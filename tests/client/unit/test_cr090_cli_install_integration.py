@@ -96,6 +96,10 @@ EXPECTED_FLEET_FILES = frozenset({
     "_crucible_lint.py",
     # The board a client posts to, loaded the same way and as eagerly.
     "_crucible_board.py",
+    # The hermetic runner, loaded the same way and as eagerly, and the
+    # tripwire it starts by path beside itself.
+    "_crucible_hermetic.py",
+    "_crucible_tripwire.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations, package

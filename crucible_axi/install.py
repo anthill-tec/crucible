@@ -259,6 +259,8 @@ FLEET_FILES = (
     "_crucible_project.py",
     "_crucible_lint.py",
     "_crucible_board.py",
+    "_crucible_hermetic.py",
+    "_crucible_tripwire.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,

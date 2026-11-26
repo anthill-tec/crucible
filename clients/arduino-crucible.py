@@ -963,8 +963,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # ingest's `raw` read it.
     # A signal while the run is open is trapped and the open run disclosed.
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            run = _axi().run_streamed(["make", target], native_dir, make_env,
+        with (_axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(["make", target], make_env,
+                                   enabled=bool(getattr(args, "hermetic", False)),
+                                   project_dir=pd) as wrapped):
+            run = _axi().run_streamed(wrapped.cmd, native_dir, wrapped.env,
                                       getattr(args, "log", None), narrator,
                                       capture=True)
     except _axi().RunAbandoned as abandoned:
@@ -1433,7 +1436,9 @@ def cmd_pre_merge_gate(args):
         cycle=getattr(args, "cycle", None),
         release=getattr(args, "release", None),
         stream_checked=True, stream_key=args.stream_key,
-        stream_health=args.stream_health)
+        stream_health=args.stream_health,
+        # The gate's own suite runs hermetically when the gate was asked to.
+        hermetic=bool(getattr(args, "hermetic", False)))
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
     # runs, and every declared target it covers is a SUBSET of that run rather
     # than a replacement for it, so the gate's `suites[]` names them beside it.
@@ -2015,6 +2020,7 @@ def main():
     _add_reports_arg(t)
     _add_log_arg(t)
     _add_narrowing_args(t)
+    _axi().add_hermetic_arg(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -2080,6 +2086,7 @@ def main():
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
+    _axi().add_hermetic_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],

@@ -37,6 +37,8 @@ const SHARED_MODULES = [
   PROJECT_MODULE,
   "_crucible_lint.py",
   "_crucible_board.py",
+  "_crucible_hermetic.py",
+  "_crucible_tripwire.py",
 ];
 
 function readClientSource(fileName: string): string {
