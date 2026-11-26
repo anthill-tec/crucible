@@ -1,7 +1,10 @@
 """Unit tests for hermetic runs: config parsing, tripwire endpoint
-union, isolated environment scrubbing, availability preflight refusals, uniform
-`--hermetic` CLI surface across all six clients, gate sibling dispatch, Maven
-`--with-docker --hermetic` refusal, and fleet registration / script retirement.
+union, isolated environment scrubbing and toolchain defaults, availability
+preflight refusals (function level and per client), uniform `--hermetic` CLI
+surface across all six clients, gate sibling dispatch, Maven
+`--with-docker --hermetic` refusal, run-scoped leak records and their filing
+when a runner wrote no report, the tripwire drain timeout, and fleet
+registration.
 
 Pure unit tier: zero real subprocesses, zero sockets, zero sleeps.
 
@@ -922,6 +925,60 @@ class TripwireDrainTimeoutTest(_HermeticTestCase):
         self.assertEqual(code, 95)
         trip_proc.kill.assert_called_once()
         self.assertIn("did not drain", stderr.getvalue())
+
+
+_REFUSAL_DETAIL = "--hermetic requires `unshare` on PATH, which was not found"
+
+
+class ClientHermeticRefusalTest(_HermeticTestCase):
+    """S4 / AC3 — a refused `--hermetic` run, on every client, starts no
+    runner, opens and files nothing on the board, and answers `ok: false`."""
+
+    def _scratch_project(self):
+        scratch = Path(tempfile.mkdtemp(prefix="hermetic-refused-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        (scratch / ".env").write_text("CRUCIBLE_PROJECT_KEY=hermetic-refused-key\n",
+                                      encoding="utf-8")
+        (scratch / "crucible.toml").write_text('[client]\nurl = "http://127.0.0.1:1"\n',
+                                               encoding="utf-8")
+        return scratch
+
+    def test_every_client_refuses_before_running_or_filing_anything(self):
+        for script in CLIENT_SCRIPTS:
+            with self.subTest(client=script):
+                scratch = self._scratch_project()
+                client = load_client(script)
+                hermetic = client._axi()._HERMETIC
+                refusal = hermetic.HermeticRefused(
+                    code="hermetic-missing-tool", detail=_REFUSAL_DETAIL,
+                    help_steps=["install util-linux"])
+                stdout, stderr = io.StringIO(), io.StringIO()
+                argv = [script, "unit", "--hermetic", "--agent", "refused-agent",
+                        "--project-dir", str(scratch)]
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(hermetic, "check_hermetic_available",
+                                      side_effect=refusal),
+                    mock.patch("subprocess.run") as mock_run,
+                    mock.patch("subprocess.Popen") as mock_popen,
+                    mock.patch("urllib.request.urlopen") as mock_urlopen,
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as exit_ctx,
+                ):
+                    client.main()
+
+                self.assertNotEqual(exit_ctx.exception.code, 0)
+                mock_run.assert_not_called()
+                mock_popen.assert_not_called()
+                mock_urlopen.assert_not_called()
+                out_text = stdout.getvalue().strip()
+                self.assertTrue(out_text, f"no envelope; stderr={stderr.getvalue()!r}")
+                parsed = TOON.decode(out_text)
+                envelope = parsed.get("axi", parsed)
+                self.assertIs(envelope.get("ok"), False, f"envelope={parsed!r}")
+                self.assertIn(_REFUSAL_DETAIL, str(envelope.get("error", "")))
+                self.assertTrue(envelope.get("help"), f"refusal must carry help[]: {parsed!r}")
 
 
 class FleetRegistrationTest(unittest.TestCase):
