@@ -257,11 +257,15 @@ jobs:
       # have one definition.
       - name: Bun suite — unit tier and its verdict (hermetic)
         run: |
-          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-unit" -- \
+          python3 clients/_crucible_hermetic.py \
+            --log-dir "$RUNNER_TEMP/hermetic/bun-unit" \
+            --port 3849 --port 3850 -- \
             scripts/hermetic/unit-check.sh bun
       - name: Bun suite — integration tier (hermetic)
         run: |
-          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-integration" -- \
+          python3 clients/_crucible_hermetic.py \
+            --log-dir "$RUNNER_TEMP/hermetic/bun-integration" \
+            --port 3849 --port 3850 -- \
             bun test --timeout 30000 ./tests/integration
       # A deliberate trip, the proof that a hit fails a step: a probe asks the
       # board port 3849 and waits for the tripwire's 503. The step passes only
@@ -272,7 +276,8 @@ jobs:
           set +e
           log="$RUNNER_TEMP/hermetic/trip"
           url=http://127.0.0.1:3849/hermetic-trip-probe
-          scripts/hermetic/run.sh "$log" -- sh -c '
+          python3 clients/_crucible_hermetic.py \
+            --log-dir "$log" --port 3849 --port 3850 -- sh -c '
             code=$(curl -sS -o /dev/null -w "%{http_code}" "$1")
             echo "probe answered $code"
             [ "$code" = 503 ]' probe "$url"
@@ -466,11 +471,15 @@ jobs:
       # definition.
       - name: Python client suite — unit tier and its verdict (hermetic)
         run: |
-          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-unit" -- \
+          python3 clients/_crucible_hermetic.py \
+            --log-dir "$RUNNER_TEMP/hermetic/py-unit" \
+            --port 3849 --port 3850 -- \
             scripts/hermetic/unit-check.sh python
       - name: Python client suite — integration tier (hermetic)
         run: |
-          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-integration" -- \
+          python3 clients/_crucible_hermetic.py \
+            --log-dir "$RUNNER_TEMP/hermetic/py-integration" \
+            --port 3849 --port 3850 -- \
             .venv/bin/python -m unittest discover \
             -s tests/client/integration -t .
 

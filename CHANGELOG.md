@@ -33,6 +33,23 @@ Releases before 0.3.0 are described only on GitHub Releases.
   so the local gate can check the unit tiers as CI does. CI also pins uv at 0.13.9, and every e2e scenario's
   page drops its routes at teardown, so a route mock still fetching can no longer fail a scenario that
   passed. The RUNBOOK has a new "Unit check" section.
+- **A run can be hermetic, behind a tripwire.** Every client takes `--hermetic` on its six tier verbs,
+  `test` and `pre-merge-gate`. The flag runs the test runner in an unprivileged Linux user and network namespace:
+  only `lo` is up, every capability is dropped, `HOME` is empty, the `XDG_*` and operator registry variables are
+  unset, and `DOCKER_HOST` points nowhere. A tripwire guards the board ports: the project's and the install's
+  `[client] url` port, the shipped `default_board_port` 3849, and any `[hermetic] tripwires`. Each connection it
+  catches is filed on the run as a leak record, naming the endpoint, the port and, when the runner names it, the test.
+  The record adds a failing `tripwire` suite, so the run goes red, and the envelope carries `leaks` and exits
+  non-zero.
+
+  `[hermetic] allow_env` passes extra variables through, and a malformed `[hermetic]` table is refused, naming the
+  file and the field. Under `pre-merge-gate --hermetic`, `[unit-check]` and every test suite run hermetically, and
+  `check` and `[lint]` do not. `--hermetic` is Linux-only. Without `unshare`, `setpriv` and `ip`, or when the kernel
+  refuses the namespace, it is refused before anything runs or is filed. Maven refuses `--with-docker --hermetic`.
+
+  The wrapper ships with the client fleet as `clients/_crucible_hermetic.py`, with `clients/_crucible_tripwire.py`.
+  It also runs board-free, which is how CI now runs its hermetic steps. It replaces `scripts/hermetic/run.sh` and
+  `scripts/hermetic/tripwire.py`, which are removed. The RUNBOOK has a new "Hermetic runs" section.
 
 ### Changed
 
