@@ -201,7 +201,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-267](CR-CRU-267-a-rust-tier-verb-runs-the-tests-its-kind-names.md) | a rust tier verb runs the tests its kind names | maintenance | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-268](CR-CRU-268-a-maven-tier-verb-runs-the-tests-its-plugin-names.md) | a maven tier verb runs the tests its plugin names | maintenance | COMPLETED | 267 | 9 (0.5.0) |
 | [CR-CRU-269](CR-CRU-269-an-arduino-tier-verb-runs-host-or-target-tests-by-its-tier.md) | an arduino tier verb runs host or target tests by its tier | maintenance | COMPLETED | 267 | 9 (0.5.0) |
-| [CR-CRU-270](CR-CRU-270-a-run-can-be-hermetic-behind-a-tripwire.md) | a run can be hermetic, behind a tripwire | feature | PENDING | 267, 268, 269, 274 | 9 (0.5.0) |
+| [CR-CRU-270](CR-CRU-270-a-run-can-be-hermetic-behind-a-tripwire.md) | a run can be hermetic, behind a tripwire | feature | COMPLETED | 267, 268, 269, 274 | 9 (0.5.0) |
 | [CR-CRU-271](CR-CRU-271-the-testpypi-version-check-derives-the-version-it-checks.md) | the TestPyPI version check derives the version it checks | maintenance | COMPLETED | 266 | 9 (0.5.0) |
 | [CR-CRU-272](CR-CRU-272-the-board-ui-and-clients-take-their-intervals-as-settings.md) | the board UI and the clients take their intervals as settings | maintenance | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-273](CR-CRU-273-time-ordered-reads-break-ties-by-insertion-order.md) | time-ordered reads break ties by insertion order | bugfix | COMPLETED | — | 9 (0.5.0) |
