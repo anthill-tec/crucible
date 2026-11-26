@@ -895,6 +895,35 @@ class UnparsableConfigRefusalTest(_HermeticTestCase):
         self._assert_refused_naming(broken)
 
 
+class TripwireDrainTimeoutTest(_HermeticTestCase):
+    """S5 — a tripwire that does not drain on SIGTERM is killed and the run
+    ends in the setup failure exit 95, never an uncaught `TimeoutExpired`."""
+
+    def test_a_hanging_drain_is_killed_and_exits_95(self):
+        hermetic = self._axi()._HERMETIC
+        log_dir = Path(tempfile.mkdtemp(prefix="hermetic-drain-"))
+        self.addCleanup(shutil.rmtree, log_dir, ignore_errors=True)
+        trip_proc = mock.MagicMock()
+        trip_proc.poll.return_value = None
+        trip_proc.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="tripwire", timeout=10), -9]
+        args = argparse.Namespace(log_dir=str(log_dir), current_test_file=None,
+                                  quiet=True)
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch("subprocess.Popen", return_value=trip_proc),
+            mock.patch.object(hermetic, "_wait_for_tripwire_banner",
+                              return_value=(True, "tripwire listening 127.0.0.1:3849")),
+            mock.patch.object(hermetic, "_run_forwarding_signals", return_value=0),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = hermetic._run_dropped_stage(args, ["true"], ["127.0.0.1:3849"])
+        self.assertEqual(code, 95)
+        trip_proc.kill.assert_called_once()
+        self.assertIn("did not drain", stderr.getvalue())
+
+
 class FleetRegistrationTest(unittest.TestCase):
     """S5 / AC7 — hermetic modules registered in FLEET_FILES."""
 

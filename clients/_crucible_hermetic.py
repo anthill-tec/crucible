@@ -62,6 +62,8 @@ HERMETIC_EXIT_HIT = 99
 
 _BANNER_WAIT_SECONDS = 10.0
 _BANNER_POLL_SECONDS = 0.05
+# How long the tripwire may take to drain its in-flight handlers on SIGTERM.
+_DRAIN_WAIT_SECONDS = 10.0
 
 XDG_VARS = (
     "XDG_CONFIG_HOME",
@@ -941,7 +943,17 @@ def _run_dropped_stage(
         )
 
     trip_proc.send_signal(signal.SIGTERM)
-    trip_status = trip_proc.wait(timeout=10)
+    try:
+        trip_status = trip_proc.wait(timeout=_DRAIN_WAIT_SECONDS)
+    except subprocess.TimeoutExpired:
+        trip_proc.kill()
+        trip_proc.wait()
+        _replay_log(tripwire_log, sys.stderr)
+        return _setup_failure(
+            HERMETIC_EXIT_TRIPWIRE_DIED,
+            f"the tripwire did not drain within {_DRAIN_WAIT_SECONDS:g}s of "
+            f"SIGTERM and was killed",
+        )
     if trip_status != 0:
         _replay_log(tripwire_log, sys.stderr)
         return _setup_failure(
