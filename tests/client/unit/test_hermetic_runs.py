@@ -1,4 +1,4 @@
-"""Unit tests for CR-CRU-270 hermetic runs: config parsing, tripwire endpoint
+"""Unit tests for hermetic runs: config parsing, tripwire endpoint
 union, isolated environment scrubbing, availability preflight refusals, uniform
 `--hermetic` CLI surface across all six clients, gate sibling dispatch, Maven
 `--with-docker --hermetic` refusal, and fleet registration / script retirement.

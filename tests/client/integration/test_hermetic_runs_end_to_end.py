@@ -1,4 +1,4 @@
-"""End-to-end integration tests for CR-CRU-270 hermetic runs: real Linux user +
+"""End-to-end integration tests for hermetic runs: real Linux user +
 network namespace, real `_crucible_tripwire.py`, real `python-crucible.py` /
 `bun-crucible.py` subprocesses, and a real throwaway `RealBoard` (`bun run
 src/server.ts` on an OS-assigned free port over a `mkdtemp` store).
@@ -50,7 +50,7 @@ _BOARD: RealBoard | None = None
 def setUpModule():
     global _BOARD
     if sys.platform != "linux":
-        raise AssertionError("CR-CRU-270 integration tests require Linux namespaces")
+        raise AssertionError("hermetic-run integration tests require Linux namespaces")
     bun = shutil.which("bun")
     if bun is None:
         raise AssertionError("these integration tests require `bun` to boot RealBoard")

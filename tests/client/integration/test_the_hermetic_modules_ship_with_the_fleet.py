@@ -1,7 +1,7 @@
 """The shared hermetic modules ship with the client fleet: a sandboxed
 `crucible-axi install` lays `_crucible_hermetic.py` and `_crucible_tripwire.py`
 down beside the other shared modules, and every installed client's `unit --help`
-loads from the install and exposes `--hermetic` (CR-CRU-270 AC7).
+loads from the install and exposes `--hermetic`.
 
 The install is the real `cli.main(["install", "--target-dir", <scratch>,
 "--no-service"])` in the sandbox `test_cr090_cli_install_integration` uses:

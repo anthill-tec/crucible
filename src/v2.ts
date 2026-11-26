@@ -2070,9 +2070,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
       {
         summary: body.summary as RunSummary,
         tree: body.tree as SuiteNode[],
-        // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
+        // Discard-on-fail is applied by the store; pass coverage through.
         ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
-        // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
+        // Run-level raw output; retained even on a failing ingest.
         ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
       },
       parsedLeaks.leaks,
