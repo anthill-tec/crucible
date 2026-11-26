@@ -54,14 +54,15 @@ CI guards both board ports: `--port 3849 --port 3850`.
 | `CARGO_HOME` | kept if set, else `<original HOME>/.cargo` |
 | `ARDUINO_DIRECTORIES_DATA` (arduino-cli's data directory) | kept if set, else `<original HOME>/.arduino15` |
 | `GOROOT` | kept if set, else `go env GOROOT` when `go` is on `PATH` |
-| `GOPATH`, `GOMODCACHE`, `GOCACHE` | the suite's caches: `.cache/test-suite/go`, `go-mod`, `go-build` |
+| `GOPATH`, `GOMODCACHE`, `GOCACHE` | kept if set, else the suite's caches: `.cache/test-suite/go`, `go-mod`, `go-build` |
 | `DOCKER_HOST` | `unix:///nonexistent` |
 
 The suite's own `.cache/test-suite/` lives in the repository, so the `HOME` redirection leaves it in
 place. Every other variable is inherited unchanged.
 
-A client's `--hermetic` run scrubs the same variables, but it only KEEPS a toolchain variable that is
-already set. It also passes through the names in the project's `[hermetic] allow_env`.
+A client's `--hermetic` run builds the same environment: it applies the same toolchain defaults,
+through the same helper, before it redirects `HOME`, with the project's working tree as the place
+of `.cache/test-suite/`. It also passes through the names in the project's `[hermetic] allow_env`.
 
 ### Exit codes
 
@@ -96,7 +97,10 @@ once every requested socket is bound. Each connection is logged at `accept()`:
 
 It finds the peer process through `/proc`; `?` means it found none. It finds the running test in the
 peer's `CRUCIBLE_CURRENT_TEST` or `PYTEST_CURRENT_TEST`. Failing those, it reads the current-test
-file that `clients/subtest_runner.py` writes. Each connection is answered `503` and closed. On
+file that `clients/subtest_runner.py` writes. `/proc/<pid>/environ` shows only the environment a
+process started with, so a test is named exactly for Python `unittest` runs through
+`subtest_runner.py`. A pytest run sets `PYTEST_CURRENT_TEST` in-process, where the tripwire cannot
+read it, so its hit falls back to `cmd` and `pid`. Each connection is answered `503` and closed. On
 SIGTERM the tripwire stops accepting, waits for every in-flight handler, writes the leak records
 and exits 0. It exits 1 if a socket cannot bind, and 3 if a listening socket fails during the run.
 

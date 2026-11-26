@@ -482,9 +482,13 @@ inside it, in the project's working tree:
   - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`;
   - the operator registry variables: `CRUCIBLE_PROJECT_KEY`, `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`,
     `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`, `PROJECT_STACKS` and `KNOWLEDGE_CATEGORY`.
-- These toolchain variables are kept when they are set: `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME`,
-  `ARDUINO_DIRECTORIES_DATA`, `GOROOT`, `GOPATH`, `GOMODCACHE` and `GOCACHE`. So are the names in
-  `[hermetic] allow_env`.
+- The toolchain variables get the same defaults as the standalone CLI, applied before `HOME` is redirected. A value
+  already set is kept:
+  - `PLAYWRIGHT_BROWSERS_PATH`, `RUSTUP_HOME`, `CARGO_HOME` and `ARDUINO_DIRECTORIES_DATA` point at your original
+    home's stores (`~/.cache/ms-playwright`, `~/.rustup`, `~/.cargo` and `~/.arduino15`);
+  - `GOROOT` comes from `go env GOROOT` when `go` is on `PATH`;
+  - `GOPATH`, `GOMODCACHE` and `GOCACHE` sit under the working tree's `.cache/test-suite`.
+- The names in `[hermetic] allow_env` are passed through.
 
 **Tripwire ports.** The tripwire listens before the runner starts. It guards the union of these ports, with
 duplicates removed:
@@ -504,7 +508,8 @@ allow_env = ["MY_TOOLCHAIN_CACHE"]     # optional: extra variable names passed t
 ```
 
 The table is read from the project's `crucible.toml`, else the install's. It is checked before anything runs. A
-malformed value is refused with an `error` naming the file and the field. Malformed means:
+`crucible.toml` that does not parse is refused with an `error` naming the file. A malformed value is refused with an
+`error` naming the file and the field. Malformed means:
 
 - a `tripwires` entry that is not a port in `1..65535` or a `host:port`;
 - an `allow_env` entry that is not a non-empty string;
@@ -513,13 +518,16 @@ malformed value is refused with an `error` naming the file and the field. Malfor
 **Leak records.** Each connection the tripwire catches becomes a leak record. A record has these fields:
 
 - `endpoint` and `port`;
-- the `test` that was running, when the runner names it (Python `unittest` through `subtest_runner.py`, or pytest);
+- the `test` that was running, when the runner names it: Python `unittest` through `subtest_runner.py`. A pytest run
+  sets its current test in-process, where the tripwire cannot read it, so a pytest hit falls back to `cmd` and `pid`;
 - the `pid` and `cmd` of the connecting process;
 - the first `request` line.
 
-The run is filed with its `leaks`. The board adds a failing `tripwire` suite with one case per hit, so the run is
-red. The envelope carries `leaks`, reads `ok: false`, and the client exits non-zero. A runner that crashed before it
-reported anything still has its hits filed.
+The run is filed with its own `leaks`: a later suite in the same invocation never inherits them. The board adds a
+failing `tripwire` suite with one case per hit, so the run is red. The envelope carries `leaks`, reads `ok: false`,
+and the client exits non-zero. A runner that crashed before it reported anything (for example a test module that
+reached the board at import time) still has its hits filed: the run is filed on `/api/v2/runs/parsed` with no tests
+of its own and its `leaks`.
 
 **The gate.** Under `pre-merge-gate --hermetic`:
 
