@@ -650,6 +650,102 @@ class ClientHermeticCliAndGateSurfaceTest(_HermeticTestCase):
         self.assertTrue(axi_env.get("help"), f"refusal must carry help[]: {parsed!r}")
 
 
+def _prepared(project_dir):
+    """`prepare_hermetic_run`'s answer for a scratch project, with no probe."""
+    del project_dir
+    return ({"tripwires": [], "allow_env": [], "default_board_port": 3849},
+            [("127.0.0.1", 3849), ("::1", 3849)])
+
+
+class ToolchainDefaultsTest(_HermeticTestCase):
+    """S1 — every hermetic run, client and standalone, gets the toolchain
+    defaults before `HOME` is redirected; a value already set is kept."""
+
+    def setUp(self):
+        self.axi = self._axi()
+        self.hermetic = self.axi._HERMETIC
+
+    def test_unset_toolchain_variables_get_the_defaults(self):
+        environ = {"HOME": "/home/operator", "PATH": "/usr/bin"}
+        with (
+            mock.patch("shutil.which", return_value=None),
+            mock.patch("subprocess.run") as mock_run,
+        ):
+            env = self.axi.apply_toolchain_defaults(environ, "/work/tree")
+        mock_run.assert_not_called()
+        self.assertEqual(environ, {"HOME": "/home/operator", "PATH": "/usr/bin"},
+                         "the caller's environment must not be mutated")
+        self.assertEqual(env["PLAYWRIGHT_BROWSERS_PATH"], "/home/operator/.cache/ms-playwright")
+        self.assertEqual(env["RUSTUP_HOME"], "/home/operator/.rustup")
+        self.assertEqual(env["CARGO_HOME"], "/home/operator/.cargo")
+        self.assertEqual(env["ARDUINO_DIRECTORIES_DATA"], "/home/operator/.arduino15")
+        self.assertEqual(env["GOPATH"], "/work/tree/.cache/test-suite/go")
+        self.assertEqual(env["GOMODCACHE"], "/work/tree/.cache/test-suite/go-mod")
+        self.assertEqual(env["GOCACHE"], "/work/tree/.cache/test-suite/go-build")
+        self.assertNotIn("GOROOT", env, "no `go` on PATH: GOROOT stays unset")
+
+    def test_goroot_comes_from_go_env_when_go_is_on_path(self):
+        probe = subprocess.CompletedProcess(
+            args=["/usr/bin/go", "env", "GOROOT"], returncode=0,
+            stdout="/usr/lib/go\n", stderr="")
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/go"),
+            mock.patch("subprocess.run", return_value=probe) as mock_run,
+        ):
+            env = self.axi.apply_toolchain_defaults(
+                {"HOME": "/home/operator", "PATH": "/usr/bin"}, "/work/tree")
+        self.assertEqual(env["GOROOT"], "/usr/lib/go")
+        self.assertEqual(mock_run.call_args.args[0], ["/usr/bin/go", "env", "GOROOT"])
+
+    def test_a_value_already_set_is_kept(self):
+        environ = {"HOME": "/home/operator", "PATH": "/usr/bin"}
+        environ.update({key: f"/set/{key.lower()}" for key in STANDARD_TOOLCHAIN_VARS})
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/go"),
+            mock.patch("subprocess.run") as mock_run,
+        ):
+            env = self.axi.apply_toolchain_defaults(environ, "/work/tree")
+        mock_run.assert_not_called()
+        for key in STANDARD_TOOLCHAIN_VARS:
+            self.assertEqual(env[key], f"/set/{key.lower()}", f"{key} must be kept")
+
+    def test_a_failing_go_env_is_refused(self):
+        failed = subprocess.CompletedProcess(
+            args=["/usr/bin/go", "env", "GOROOT"], returncode=1, stdout="",
+            stderr="go: broken")
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/go"),
+            mock.patch("subprocess.run", return_value=failed),
+            self.assertRaises(self.axi.HermeticRefused) as refused,
+        ):
+            self.axi.apply_toolchain_defaults(
+                {"HOME": "/home/operator", "PATH": "/usr/bin"}, "/work/tree")
+        self.assertIn("go env GOROOT", refused.exception.detail)
+        self.assertIn("go: broken", refused.exception.detail)
+
+    def test_the_client_path_hands_the_runner_the_defaults_under_an_isolated_home(self):
+        scratch = Path(tempfile.mkdtemp(prefix="hermetic-toolchain-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        with (
+            mock.patch.object(self.hermetic, "prepare_hermetic_run",
+                              side_effect=lambda **kw: _prepared(kw.get("project_dir"))),
+            mock.patch("shutil.which", return_value=None),
+            mock.patch("subprocess.run") as mock_run,
+            self.axi.hermetic_wrap(["runner"], {"HOME": "/home/operator", "PATH": "/usr/bin"},
+                                   enabled=True, project_dir=str(scratch)) as wrapped,
+        ):
+            runner_env = dict(wrapped.env)
+        mock_run.assert_not_called()
+        self.assertNotEqual(runner_env["HOME"], "/home/operator")
+        self.assertEqual(runner_env["RUSTUP_HOME"], "/home/operator/.rustup")
+        self.assertEqual(runner_env["CARGO_HOME"], "/home/operator/.cargo")
+        self.assertEqual(runner_env["PLAYWRIGHT_BROWSERS_PATH"],
+                         "/home/operator/.cache/ms-playwright")
+        self.assertEqual(runner_env["ARDUINO_DIRECTORIES_DATA"], "/home/operator/.arduino15")
+        self.assertEqual(runner_env["GOPATH"],
+                         os.path.join(str(scratch), ".cache", "test-suite", "go"))
+
+
 class FleetRegistrationTest(unittest.TestCase):
     """S5 / AC7 — hermetic modules registered in FLEET_FILES."""
 

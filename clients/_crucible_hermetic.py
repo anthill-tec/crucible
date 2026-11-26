@@ -392,6 +392,58 @@ def resolve_tripwire_endpoints(
     return endpoints
 
 
+def _toolchain_refusal(detail: str) -> HermeticRefused:
+    return HermeticRefused(
+        code="hermetic-toolchain-unavailable",
+        detail=detail,
+        help_steps=[
+            "set the toolchain variable yourself (for example GOROOT) before "
+            "running with --hermetic",
+            "or run without --hermetic",
+        ],
+    )
+
+
+def apply_toolchain_defaults(
+    environ: typing.Mapping[str, str], cwd: str
+) -> dict[str, str]:
+    """The toolchain defaults every hermetic run gets, client and standalone
+    alike, as the retired `scripts/hermetic/run.sh` exported them before
+    redirecting `HOME`: the Playwright, Rust and Arduino stores keep pointing
+    at the ORIGINAL home, Go resolves `GOROOT` from `go env` when `go` is on
+    `PATH`, and keeps its path and caches in the working tree `cwd`'s
+    `.cache/test-suite`. A value already set is kept. Returns a new dict;
+    raises `HermeticRefused` when `HOME` is unset or `go env GOROOT` fails."""
+    env = dict(environ)
+    home = env.get("HOME")
+    if not home:
+        raise _toolchain_refusal("HOME is not set")
+    suite_cache = os.path.join(cwd, ".cache", "test-suite")
+    defaults = {
+        "PLAYWRIGHT_BROWSERS_PATH": os.path.join(home, ".cache", "ms-playwright"),
+        "RUSTUP_HOME": os.path.join(home, ".rustup"),
+        "CARGO_HOME": os.path.join(home, ".cargo"),
+        "ARDUINO_DIRECTORIES_DATA": os.path.join(home, ".arduino15"),
+        "GOPATH": os.path.join(suite_cache, "go"),
+        "GOMODCACHE": os.path.join(suite_cache, "go-mod"),
+        "GOCACHE": os.path.join(suite_cache, "go-build"),
+    }
+    for key, value in defaults.items():
+        if not env.get(key):
+            env[key] = value
+    go = shutil.which("go", path=env.get("PATH"))
+    if not env.get("GOROOT") and go is not None:
+        probe = subprocess.run(
+            [go, "env", "GOROOT"], capture_output=True, text=True, check=False
+        )
+        if probe.returncode != 0 or not probe.stdout.strip():
+            raise _toolchain_refusal(
+                f"`go env GOROOT` failed: {probe.stderr.strip() or f'exit {probe.returncode}'}"
+            )
+        env["GOROOT"] = probe.stdout.strip()
+    return env
+
+
 def build_isolated_env(
     base_env: typing.Mapping[str, str],
     iso_home: str,
@@ -567,13 +619,17 @@ class HermeticWrap:
             project_dir=self._project_dir,
             install_dir=self._install_dir,
         )
+        # The toolchain stores are resolved against the ORIGINAL home, before
+        # the runner's `HOME` is redirected (the same defaults the standalone
+        # CLI applies).
+        base_env = apply_toolchain_defaults(self._orig_env, self._working_tree())
         log_dir = tempfile.mkdtemp(prefix="crucible-hermetic-")
         self._log_dir = log_dir
         iso_home = os.path.join(log_dir, "home")
         os.makedirs(iso_home, exist_ok=True)
         current_test_file = os.path.join(log_dir, "current-test.txt")
         self.env = build_isolated_env(
-            self._orig_env,
+            base_env,
             iso_home,
             allow_env=cfg["allow_env"],
             current_test_file=current_test_file,
@@ -595,6 +651,13 @@ class HermeticWrap:
         wrapped.extend(self._orig_cmd)
         self.cmd = wrapped
         return self
+
+    def _working_tree(self) -> str:
+        """The working tree the runner runs in: the project's directory."""
+        project_dir = self._project_dir
+        if project_dir is None and _core is not None:
+            project_dir = _core._PROJECT_DIR
+        return os.path.abspath(project_dir or os.getcwd())
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
         if self._log_dir is None:
@@ -630,42 +693,6 @@ def hermetic_wrap(
 
 
 # ── Standalone CLI (board-free hermetic launcher) ────────────────────────────
-
-
-def _standalone_toolchain_env(
-    environ: typing.Mapping[str, str], cwd: str
-) -> dict[str, str]:
-    """The standalone CLI's toolchain defaults, as the retired
-    `scripts/hermetic/run.sh` exported them before redirecting `HOME`: the
-    Playwright, Rust and Arduino stores keep pointing at the ORIGINAL home, Go
-    resolves `GOROOT` from `go env` and keeps its path and caches in the
-    working tree's `.cache/test-suite`. A value already set is kept."""
-    env = dict(environ)
-    home = env.get("HOME")
-    if not home:
-        raise RuntimeError("HOME is not set")
-    suite_cache = os.path.join(cwd, ".cache", "test-suite")
-    defaults = {
-        "PLAYWRIGHT_BROWSERS_PATH": os.path.join(home, ".cache", "ms-playwright"),
-        "RUSTUP_HOME": os.path.join(home, ".rustup"),
-        "CARGO_HOME": os.path.join(home, ".cargo"),
-        "ARDUINO_DIRECTORIES_DATA": os.path.join(home, ".arduino15"),
-    }
-    for key, value in defaults.items():
-        if not env.get(key):
-            env[key] = value
-    go = shutil.which("go", path=env.get("PATH"))
-    if not env.get("GOROOT") and go is not None:
-        probe = subprocess.run(
-            [go, "env", "GOROOT"], capture_output=True, text=True, check=False
-        )
-        if probe.returncode != 0 or not probe.stdout.strip():
-            raise RuntimeError(f"`go env GOROOT` failed: {probe.stderr.strip()}")
-        env["GOROOT"] = probe.stdout.strip()
-    env["GOPATH"] = os.path.join(suite_cache, "go")
-    env["GOMODCACHE"] = os.path.join(suite_cache, "go-mod")
-    env["GOCACHE"] = os.path.join(suite_cache, "go-build")
-    return env
 
 
 def _print_preamble() -> None:
@@ -956,9 +983,9 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(iso_home, ignore_errors=True)
             os.makedirs(iso_home, exist_ok=True)
             try:
-                base_env = _standalone_toolchain_env(os.environ, os.getcwd())
-            except RuntimeError as exc:
-                return _setup_failure(HERMETIC_EXIT_MISSING, str(exc))
+                base_env = apply_toolchain_defaults(os.environ, os.getcwd())
+            except HermeticRefused as exc:
+                return _setup_failure(HERMETIC_EXIT_MISSING, exc.detail)
             child_env = build_isolated_env(
                 base_env,
                 iso_home,
