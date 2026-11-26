@@ -68,7 +68,7 @@ def _parse_envelope(stdout: str, stderr: str) -> dict:
     text = (stdout or "").strip()
     if not text:
         raise AssertionError(f"expected TOON envelope on stdout; stderr={stderr!r}")
-    parsed = TOON.loads(text)
+    parsed = TOON.decode(text)
     if isinstance(parsed, dict) and isinstance(parsed.get("axi"), dict):
         return parsed["axi"]
     if isinstance(parsed, dict):
@@ -429,8 +429,18 @@ class PythonHermeticEndToEndTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.board.install(str(project))
-        with open(project / "crucible.toml", "a", encoding="utf-8") as fh:
-            fh.write('\n[hermetic]\nallow_env = ["CUSTOM_ALLOWED_CACHE"]\n')
+        # The project file already carries the shipped `[hermetic]` table, so
+        # `allow_env` goes inside it: a second `[hermetic]` header is invalid TOML.
+        project_toml = project / "crucible.toml"
+        toml_text, replaced = re.subn(
+            r"(?m)^\[hermetic\][ \t]*$",
+            '[hermetic]\nallow_env = ["CUSTOM_ALLOWED_CACHE"]',
+            project_toml.read_text(encoding="utf-8"),
+            count=1,
+        )
+        if replaced != 1:
+            raise AssertionError("fixture broken: the project file carries no [hermetic] table")
+        project_toml.write_text(toml_text, encoding="utf-8")
 
         agent_id = "py-hermetic-clean-agent"
         _register_agent(self.board, agent_id)

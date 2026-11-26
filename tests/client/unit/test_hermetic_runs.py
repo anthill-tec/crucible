@@ -655,7 +655,7 @@ class ClientHermeticCliAndGateSurfaceTest(_HermeticTestCase):
             out_text,
             f"expected ok:false TOON envelope on stdout; stderr={stderr.getvalue()!r}",
         )
-        parsed = TOON.loads(out_text)
+        parsed = TOON.decode(out_text)
         axi_env = parsed.get("axi", parsed)
         self.assertIs(axi_env.get("ok"), False, f"envelope={parsed!r}")
         error_text = str(axi_env.get("error", "")).lower()
