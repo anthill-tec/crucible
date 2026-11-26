@@ -1998,8 +1998,8 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     count, total, stated, _ran = stream_counts(stream_path, codec)
     # A hermetic run's tripwire hits are never lost: a run that caught one is
     # always closed by its stream, which files the hits (`post_ingest`), even
-    # when its runner reported nothing.
-    leaked = bool(_core.current_hermetic_leaks())
+    # when its runner reported nothing. Only this run's own hits count.
+    leaked = bool(_core.pending_hermetic_run_leaks())
     zero = (zero_discovery(result)
             if count == 0 and zero_discovery is not None and not leaked
             else None)

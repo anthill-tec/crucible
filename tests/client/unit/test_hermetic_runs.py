@@ -650,11 +650,69 @@ class ClientHermeticCliAndGateSurfaceTest(_HermeticTestCase):
         self.assertTrue(axi_env.get("help"), f"refusal must carry help[]: {parsed!r}")
 
 
+_LEAK = {"endpoint": "127.0.0.1:3849", "port": 3849, "pid": "4242", "cmd": "probe"}
+
+
+def _fake_post(posted):
+    """A client `_post` stand-in that records every write and answers each
+    as a filed run."""
+
+    def post(path, payload, timeout=None):
+        posted.append((path, payload))
+        return {"ok": True, "event": f"evt-{len(posted)}",
+                "run": {"passed": 0, "failed": 1, "pending": 0, "total": 1}}
+
+    return post
+
+
 def _prepared(project_dir):
     """`prepare_hermetic_run`'s answer for a scratch project, with no probe."""
     del project_dir
     return ({"tripwires": [], "allow_env": [], "default_board_port": 3849},
             [("127.0.0.1", 3849), ("::1", 3849)])
+
+
+class HermeticLeakScopingAndFilingTest(_HermeticTestCase):
+    """S3 — a run files only the tripwire hits its own hermetic run caught,
+    and a run whose runner wrote no report still files them."""
+
+    def setUp(self):
+        self.scratch = Path(tempfile.mkdtemp(prefix="hermetic-leaks-"))
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.axi = self._axi()
+        self.hermetic = self.axi._HERMETIC
+        self.axi.forget_hermetic_leaks()
+
+    def _wrap_once(self):
+        with self.axi.hermetic_wrap(["runner"], {"HOME": str(self.scratch / "home")},
+                                    enabled=True, project_dir=str(self.scratch)):
+            pass
+
+    def test_a_clean_suite_after_a_leaking_one_files_with_no_leaks(self):
+        posted = []
+        post = _fake_post(posted)
+        body = {"projectKey": "k", "agentId": "a", "codec": "junit", "data": []}
+        with (
+            mock.patch.object(self.hermetic, "prepare_hermetic_run",
+                              side_effect=lambda **kw: _prepared(kw.get("project_dir"))),
+            mock.patch.object(self.hermetic, "apply_toolchain_defaults",
+                              side_effect=lambda env, _cwd: dict(env)),
+            mock.patch.object(self.hermetic, "_read_leaks_file",
+                              side_effect=[[dict(_LEAK)], []]),
+        ):
+            self._wrap_once()
+            self.axi.post_ingest(post, "/api/v2/runs", dict(body), stack="go")
+            self._wrap_once()
+            self.assertEqual(self.axi.pending_hermetic_run_leaks(), [],
+                             "a clean run must not inherit an earlier run's hits")
+            self.axi.post_ingest(post, "/api/v2/runs", dict(body), stack="go")
+
+        self.assertEqual(len(posted), 2)
+        self.assertEqual(posted[0][1].get("leaks"), [_LEAK])
+        self.assertNotIn("leaks", posted[1][1],
+                         f"the clean suite must file no leaks: {posted[1][1]!r}")
+        # The invocation's own envelope still carries the hit it caught.
+        self.assertEqual(self.axi.current_hermetic_leaks(), [_LEAK])
 
 
 class ToolchainDefaultsTest(_HermeticTestCase):

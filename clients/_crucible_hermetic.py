@@ -102,8 +102,13 @@ _HERMETIC_FLAG_HELP = (
 
 # Per-invocation tripwire leaks recorded by `HermeticWrap`; reset at the start
 # of every verb dispatch (`forget_hermetic_leaks`) so no invocation inherits an
-# earlier run's leaks in the same process.
+# earlier run's leaks in the same process. The envelope reads these.
 _recorded_leaks: list[dict[str, typing.Any]] = []
+# The leaks of the latest hermetic run that no run ingest has filed yet: a run
+# files only its own hits, so a later suite in the same process (a composed
+# gate) never inherits an earlier suite's. Reset when a recording wrap starts
+# and taken by the run ingest that files them (`take_hermetic_run_leaks`).
+_pending_run_leaks: list[dict[str, typing.Any]] = []
 
 
 class HermeticRefused(Exception):
@@ -147,20 +152,36 @@ def emit_hermetic_refused_hard_stop(
 
 
 def forget_hermetic_leaks() -> None:
-    """Clear per-invocation recorded tripwire leaks."""
+    """Clear per-invocation recorded tripwire leaks, and any run's unfiled ones."""
     _recorded_leaks.clear()
+    _pending_run_leaks.clear()
 
 
 def note_hermetic_leaks(leaks: list[dict[str, typing.Any]]) -> None:
-    """Record tripwire leaks observed during the active invocation."""
+    """Record tripwire leaks observed during the active invocation, as the
+    latest run's leaks still to be filed and in the invocation's record."""
     for item in leaks:
         if isinstance(item, dict) and item.get("endpoint") and item.get("port"):
             _recorded_leaks.append(dict(item))
+            _pending_run_leaks.append(dict(item))
 
 
 def current_hermetic_leaks() -> list[dict[str, typing.Any]]:
     """Return a copy of the tripwire leaks recorded for the active invocation."""
     return [dict(item) for item in _recorded_leaks]
+
+
+def pending_hermetic_run_leaks() -> list[dict[str, typing.Any]]:
+    """Return a copy of the latest run's leaks that no run ingest has filed."""
+    return [dict(item) for item in _pending_run_leaks]
+
+
+def take_hermetic_run_leaks() -> list[dict[str, typing.Any]]:
+    """Return the latest run's unfiled leaks and forget them: the run ingest
+    that carries them is the only one that files them."""
+    taken = pending_hermetic_run_leaks()
+    _pending_run_leaks.clear()
+    return taken
 
 
 def _is_valid_port(value: typing.Any) -> bool:
@@ -623,6 +644,9 @@ class HermeticWrap:
         # the runner's `HOME` is redirected (the same defaults the standalone
         # CLI applies).
         base_env = apply_toolchain_defaults(self._orig_env, self._working_tree())
+        if self._record:
+            # This run files only its own hits: none an earlier run left.
+            _pending_run_leaks.clear()
         log_dir = tempfile.mkdtemp(prefix="crucible-hermetic-")
         self._log_dir = log_dir
         iso_home = os.path.join(log_dir, "home")

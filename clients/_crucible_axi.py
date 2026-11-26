@@ -6599,7 +6599,9 @@ def post_ingest(post_fn, path, payload, *, stack, release=None, framework=None):
                if framework else {}), **({"release": release} if release else {})}
     if path in RUN_INGEST_PATHS:
         _ingested_run_tier = (payload or {}).get("tier")
-        hermetic_leaks = current_hermetic_leaks()
+        # A run files only the hits its own hermetic run caught, once: the
+        # next run in this process starts with none.
+        hermetic_leaks = take_hermetic_run_leaks()
         if hermetic_leaks and "leaks" not in payload:
             payload = {**payload, "leaks": hermetic_leaks}
     elif path == COMPILE_INGEST_PATH:
@@ -7720,6 +7722,8 @@ forget_hermetic_leaks = _HERMETIC.forget_hermetic_leaks
 hermetic_preflight = _HERMETIC.hermetic_preflight
 refuse_hermetic_with_docker = _HERMETIC.refuse_hermetic_with_docker
 current_hermetic_leaks = _HERMETIC.current_hermetic_leaks
+pending_hermetic_run_leaks = _HERMETIC.pending_hermetic_run_leaks
+take_hermetic_run_leaks = _HERMETIC.take_hermetic_run_leaks
 _reexport_module(_HERMETIC)
 
 
