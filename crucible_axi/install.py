@@ -213,7 +213,7 @@ _NO_USER_BUS_REASON = (
 XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
 _DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
 STORE_DIR_NAME = "crucible"
-# The packaged fleet, exactly (CR-CRU-090 §S1). The seven stack clients plus:
+# The packaged fleet, exactly. The seven stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
 # which the seven load BY FILE PATH from their OWN directory, so a clients-only
 # copy lays down seven UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
