@@ -39,8 +39,10 @@ What a run verb does:
   its --tests. Each run is opened on the board before pytest starts, headless
   and EDA_PYTEST_COLUMNS wide, and is filed by how pytest exited: its JUnit
   report, a compile record when pytest failed as a runner or wrote no
-  report, or aborted when it ran nothing. A signal aborts the open run and
-  runs nothing more. One envelope states every run: its `verdict` (fail,
+  report, or aborted when it ran nothing. A signal while pytest runs aborts
+  the open run; a signal while the run is being filed lets the filing
+  finish, so the run is filed. Either way nothing more runs, and the exit
+  is 128+signal. One envelope states every run: its `verdict` (fail,
   skip or pass), `entries[]` for a tier verb, `events[]`, and the skipped
   tests (`skipped[]`, at most SKIPPED_LIST_LIMIT, `skippedNotListed`). A
   `unit` run whose wall clock is at or over twice its child CPU carries the
