@@ -20,6 +20,7 @@ It imports only the standard library.
 """
 
 import contextlib
+import fnmatch
 import glob
 import json
 import os
@@ -2221,6 +2222,12 @@ def pytest_error_line(output):
 PYTEST_PROBE_TIMEOUT_S = 60
 
 
+def pytest_probe_timeout():
+    """How many seconds the pytest import probe waits for an answer before it
+    gives up: the timeout `pytest_importable` uses when called now."""
+    return PYTEST_PROBE_TIMEOUT_S
+
+
 def pytest_importable(python, cwd):
     """Whether `python` can import pytest, probed in `cwd`: True when it
     imports, False when it cannot or the interpreter cannot be started, and
@@ -2244,7 +2251,7 @@ def junit_report_paths(reports_dir):
 
 def _is_junit_report(entry):
     """Whether the directory entry `entry` is named as a JUnit report."""
-    return entry.startswith("TEST-") and entry.endswith(".xml")
+    return fnmatch.fnmatchcase(entry, JUNIT_REPORT_GLOB)
 
 
 def produced_junit(reports_dir):

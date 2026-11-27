@@ -233,12 +233,10 @@ def _resolve_runner(args, project_dir, probe=True):
         python = _resolve_python(getattr(args, "python", None), project_dir)
         importable = _axi().pytest_importable(python, project_dir)
         if importable is None:
-            # The timeout the probe used is the run module's own: the core's
-            # re-exported copy is a value, which a rebinding never reaches.
             raise RunnerRefused(
                 f"the runner is {_PYTEST}, but the interpreter {python} did not "
                 f"answer whether it can import {_PYTEST} within "
-                f"{_axi()._RUN.PYTEST_PROBE_TIMEOUT_S}s; check that interpreter, "
+                f"{_axi().pytest_probe_timeout()}s; check that interpreter, "
                 f"or choose another with --python")
         if not importable:
             raise RunnerRefused(

@@ -45,6 +45,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.client.live_run_harness import load_client
 
@@ -440,6 +441,16 @@ class ThePytestProbeTimeoutIsSharedTest(_RunModuleTest):
 
     def test_the_probe_waits_sixty_seconds(self):
         self.assertEqual(self.shared("PYTEST_PROBE_TIMEOUT_S"), 60)
+
+    def test_the_clients_core_answers_the_probes_current_timeout(self):
+        namespace = _run_module_namespace()
+        shipped = self.shared("PYTEST_PROBE_TIMEOUT_S")
+        with mock.patch.dict(namespace, {"PYTEST_PROBE_TIMEOUT_S": 7}):
+            self.assertEqual(_core().pytest_probe_timeout(), 7,
+                             "the core answers the timeout the probe would use now")
+        self.assertEqual(namespace["PYTEST_PROBE_TIMEOUT_S"], shipped,
+                         "the patched timeout is restored afterwards")
+        self.assertEqual(_core().pytest_probe_timeout(), shipped)
 
 
 if __name__ == "__main__":
