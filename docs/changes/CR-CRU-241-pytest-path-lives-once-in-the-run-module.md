@@ -1,6 +1,6 @@
 # CR-CRU-241 — the python client's pytest path lives once in the shared run module
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-11-27 on develop)
 **Type:** maintenance
 **Priority:** high. The eda client (CR-CRU-242) calls this path.
 **Depends on:** CR-CRU-196
@@ -166,3 +166,24 @@ argv, the probe and the refusals.
 - Re-introducing the line-budget, `RUN_LINE_LIMIT` or citation pins the 2026-11-22 test cull deleted.
 - The eda client (CR-CRU-242), whose AC11 (an AST caller count) and AC12 (`SHARED_MODULE_LINE_BUDGETS`) are stale
   in the same way and are settled at its own gap analysis.
+
+## Close-out (2026-11-27)
+
+Plan 280.
+
+- **Gap analysis:** the named suites were green at 329/0 and the six real-pytest suites at 90/0 before any change.
+  Four user rulings followed: drop the pins the test cull deleted; replace the source-shape checks with behaviour
+  tests and review; lift the whole pytest path, including the pieces the spec had missed; and let the shared probe
+  answer `None` on a timeout, with python's wording pinned.
+- **Cycle 1039, RED/GREEN (§S1):** 34 failing unit tests plus 5 pins of python's argv. Every §S1 name was added to
+  `clients/_crucible_run.py` (153 lines), standard library only, re-exported with no collision.
+- **Cycle 1040, RED/GREEN (§S2):** 25 integration tests on real interpreters: 1 failed for the spec's reason (the
+  timeout refusal) and 24 pinned behaviour. python's eleven call sites use the shared names, and every moved copy
+  was deleted (+57 / −160).
+- **Cycle 1041, VERIFY:** PASS, with no must-fix finding, one should-fix finding for CR-CRU-242 (the outcome routing
+  stays in python), and six notes. The runner guard was confirmed by reading.
+- **Cycle 1042, FIX (user-chosen notes):** a public `pytest_probe_timeout()` replaces the reach into the core's
+  private `_RUN`; `_is_junit_report` matches `JUNIT_REPORT_GLOB`; a stale test docstring was reworded.
+- **Pre-merge gate (cycle 1042):** 13,779 passed and 0 failed in about 25 minutes. By suite: bun 5,170, python
+  unit 2,787, python integration 5,822.
+- **Carried to CR-CRU-242's gap analysis:** the outcome routing and the subtest watch's composition stay in python.

@@ -89,7 +89,6 @@ CR-SAN-001-A-RED) are readability habits only. Identity carries displayName + so
 
 import argparse
 import contextlib
-import glob
 import importlib.util
 import json
 import os
@@ -216,7 +215,8 @@ def _resolve_runner(args, project_dir, probe=True):
 
     Raises `RunnerRefused` for a value that is neither runner's name, and,
     when `probe` (a verb that runs the runner), for `pytest` with an
-    interpreter that cannot import it."""
+    interpreter that cannot import it or does not answer whether it can
+    within the shared probe's timeout."""
     flag = getattr(args, "runner", None)
     if flag is not None:
         value, source = flag, f"`{_RUNNER_FLAG}`"
@@ -231,35 +231,19 @@ def _resolve_runner(args, project_dir, probe=True):
             f"choose one of {', '.join(_RUNNERS)}")
     if value == _PYTEST and probe:
         python = _resolve_python(getattr(args, "python", None), project_dir)
-        if not _imports_pytest(python, project_dir):
+        importable = _axi().pytest_importable(python, project_dir)
+        if importable is None:
+            raise RunnerRefused(
+                f"the runner is {_PYTEST}, but the interpreter {python} did not "
+                f"answer whether it can import {_PYTEST} within "
+                f"{_axi().pytest_probe_timeout()}s; check that interpreter, "
+                f"or choose another with --python")
+        if not importable:
             raise RunnerRefused(
                 f"the runner is {_PYTEST} (from {source}), but the interpreter "
                 f"{python} cannot import {_PYTEST}; install {_PYTEST} into it, "
                 f"or choose another interpreter with --python")
     return value
-
-
-# How long the pytest import probe may take before the interpreter is refused.
-_PYTEST_PROBE_TIMEOUT_S = 60
-
-
-def _imports_pytest(python, project_dir):
-    """Whether `python` can import pytest. An interpreter that cannot be
-    started at all cannot import it either. A probe that does not answer
-    within `_PYTEST_PROBE_TIMEOUT_S` is refused, naming the interpreter."""
-    try:
-        probe = subprocess.run([python, "-c", f"import {_PYTEST}"],
-                               cwd=project_dir, capture_output=True, text=True,
-                               check=False, timeout=_PYTEST_PROBE_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        raise RunnerRefused(
-            f"the runner is {_PYTEST}, but the interpreter {python} did not "
-            f"answer whether it can import {_PYTEST} within "
-            f"{_PYTEST_PROBE_TIMEOUT_S}s; check that interpreter, or choose "
-            f"another with --python") from None
-    except OSError:
-        return False
-    return probe.returncode == 0
 
 
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ────
@@ -432,48 +416,10 @@ def _narrator(project_dir, agent_id, identity=None, runner=None):
     post = _axi().narration_poster(_post, _project_key(project_dir), agent_id,
                                    identity)
     if runner == _PYTEST:
-        progress = _PytestProgress()
+        progress = _axi().PytestProgress()
         return _axi().RunNarrator(post, progress.recognise,
                                   total=lambda: progress.selected)
     return _axi().RunNarrator(post, _recognise_completion)
-
-
-# pytest's `-v` lines: the line ending collection (`collected N items`, maybe
-# `/ D deselected / S selected`, maybe after `collecting ... `), and one verdict
-# line per finished test (`<nodeid> PASSED [ 33%]`). A subtest's `SUB...`
-# verdict and the short summary's `FAILED <nodeid> - ...` are no finished test.
-_PYTEST_COLLECTED_LINE = re.compile(
-    r"^(?:collecting \.\.\. )?collected (\d+) items?\b(.*)$")
-_PYTEST_SELECTED = re.compile(r"/ (\d+) selected\b")
-_PYTEST_VERDICT_LINE = re.compile(
-    r"^\S+::\S+.*\s(?:PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)(?:\s|$)")
-
-
-class _PytestProgress:
-    """pytest's half of the shared narration: reads the selected total from
-    the line ending collection and counts one completion per verdict line."""
-
-    def __init__(self):
-        self.selected = 0
-
-    def recognise(self, line):
-        """True when `line` is one finished test; records the selected total."""
-        text = line.rstrip("\r\n")
-        collected = _PYTEST_COLLECTED_LINE.match(text)
-        if collected:
-            stated = _PYTEST_SELECTED.search(collected.group(2))
-            self.selected = int(stated.group(1) if stated else collected.group(1))
-            return False
-        return _PYTEST_VERDICT_LINE.match(text) is not None
-
-
-# pytest's report of a passing subtest: a `SUBPASSED` verdict line, or the
-# closing summary's `N subtests passed`.
-_PYTEST_SUBTESTS_PASSED = re.compile(r"\sSUBPASSED\b|\b[1-9]\d* subtests? passed\b")
-
-_PYTEST_SUBTESTS_DETAIL = ("pytest writes no test case for a passing subtest "
-                           "in its JUnit report, so passing subtests were not "
-                           "counted")
 
 
 class _FallbackWatch:
@@ -492,7 +438,7 @@ class _FallbackWatch:
     def observe(self, line):
         """Feed one line of the runner's output."""
         if (self._watching and self._pytest
-                and _PYTEST_SUBTESTS_PASSED.search(line)):
+                and _axi().pytest_reports_passing_subtest(line)):
             self._watching = False
         if self._narrator is not None:
             self._narrator.observe(line)
@@ -503,7 +449,7 @@ class _FallbackWatch:
         if not self._pytest or self._watching:
             return []
         return [{"code": "subtests-uncounted",
-                 "detail": _PYTEST_SUBTESTS_DETAIL}]
+                 "detail": _axi().PYTEST_SUBTESTS_UNCOUNTED_DETAIL}]
 
 
 def _start_run(project_dir, agent_id, runner, tier=None, context=None, release=None):
@@ -649,14 +595,11 @@ def _reports_dir(project_dir, arg_value, agent_id=None):
 
 
 def _wipe(reports_dir):
-    """Remove stale TEST-*.xml and a stale stream file, so only the current
-    run's results get ingested."""
-    if os.path.isdir(reports_dir):
-        for entry in os.listdir(reports_dir):
-            if entry == STREAM_FILE or (entry.startswith("TEST-")
-                                        and entry.endswith(".xml")):
-                with contextlib.suppress(OSError):
-                    os.remove(os.path.join(reports_dir, entry))
+    """Remove the stale JUnit reports and a stale stream file, so only the
+    current run's results get ingested."""
+    _axi().wipe_junit_reports(reports_dir)
+    with contextlib.suppress(OSError):
+        os.remove(os.path.join(reports_dir, STREAM_FILE))
 
 
 def _subtest_runner_path():
@@ -689,45 +632,19 @@ def _unittest_cmd(python, targets, start_dir, pattern):
             *_runner_args(targets, start_dir, pattern)]
 
 
-def _pytest_args(targets, start_dir, pattern, reports_dir):
-    """pytest's arguments: verbose, a JUnit report in the reports dir in the
-    xunit1 family (the one that stamps `file=` on each test case) with its
-    suite name pinned to `pytest` (the board groups such a suite's cases by
-    module, whatever the project's own configuration names it), and what to
-    run. Node ids given, they alone are passed, as unittest's dotted paths
-    are; otherwise a stated start dir is the path pytest is given and a
-    stated pattern its `python_files`, and whatever is unstated is left to the
-    project's own pytest configuration."""
-    args = ["-v", "-o", "junit_family=xunit1", "-o", "junit_suite_name=pytest",
-            f"--junitxml={os.path.join(reports_dir, 'TEST-pytest.xml')}"]
-    if targets:
-        return args + list(targets)
-    if pattern:
-        args += ["-o", f"python_files={pattern}"]
-    if start_dir:
-        args.append(start_dir)
-    return args
-
-
 def _suite_cmd(python, runner, targets, start_dir, pattern, reports_dir):
-    """The suite invocation under the chosen runner."""
+    """The suite invocation under the chosen runner. Under pytest, node ids
+    given, they alone are passed, as unittest's dotted paths are; otherwise a
+    stated start dir is the path pytest is given and a stated pattern its
+    `python_files`, and whatever is unstated is left to the project's own
+    pytest configuration."""
     if runner == _PYTEST:
-        return [python, "-m", _PYTEST,
-                *_pytest_args(targets, start_dir, pattern, reports_dir)]
+        if targets:
+            return _axi().pytest_command(python, reports_dir, targets)
+        return _axi().pytest_command(python, reports_dir,
+                                     [start_dir] if start_dir else [],
+                                     pattern=pattern)
     return _unittest_cmd(python, targets, start_dir, pattern)
-
-
-def _report_paths(reports_dir):
-    """Every TEST-*.xml report in `reports_dir`, in sorted path order: the
-    reports a run sends to the board, which decodes them; this client parses
-    none of them."""
-    return sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
-
-
-def _produced_xml(reports_dir):
-    return os.path.isdir(reports_dir) and any(
-        e.startswith("TEST-") and e.endswith(".xml") for e in os.listdir(reports_dir)
-    )
 
 
 def _no_xml_errors_text(result, runner=_UNITTEST):
@@ -737,8 +654,7 @@ def _no_xml_errors_text(result, runner=_UNITTEST):
     if out:
         return out
     if runner == _PYTEST:
-        return (f"{_PYTEST} produced no JUnit XML "
-                f"(collection/usage failure, no output captured)")
+        return _axi().PYTEST_NO_REPORT_TEXT
     return (f"{_UNITTEST} wrote no event stream ({STREAM_FILE}) "
             f"(import/syntax failure, no output captured)")
 
@@ -751,45 +667,19 @@ def _runner_label(runner):
 def _no_report_artifact(runner):
     """What the runner writes as its record: pytest's JUnit reports, or the
     unittest runner's event stream."""
-    return "TEST-*.xml" if runner == _PYTEST else STREAM_FILE
-
-
-# pytest's exit codes for a run it could not carry out as a runner: an
-# internal error (3) and a usage error (4: a node id it cannot find, a
-# conftest it cannot load). Whatever JUnit it wrote then is no test result.
-_PYTEST_RUNNER_FAILURES = (3, 4)
-
-# pytest's own report of why it failed as a runner (under `-v` it may follow
-# the `collecting ... ` it printed on the same line).
-_PYTEST_ERROR_LINE = re.compile(
-    r"^(?:collecting \.\.\. )?"
-    r"(?P<error>(?:ERROR:|INTERNALERROR|ImportError while loading conftest).*)")
-
-
-def _pytest_failed_as_runner(runner, result):
-    """Whether pytest exited as a runner that failed, not with a result."""
-    return runner == _PYTEST and result.returncode in _PYTEST_RUNNER_FAILURES
-
-
-def _pytest_error_line(output):
-    """pytest's own error line in its captured output (the last one), or
-    None when it printed none."""
-    found = [m.group("error").strip()
-             for m in map(_PYTEST_ERROR_LINE.match, (output or "").splitlines())
-             if m]
-    return found[-1] if found else None
+    return _axi().JUNIT_REPORT_GLOB if runner == _PYTEST else STREAM_FILE
 
 
 def _no_report_subject(verb, runner):
     """What a no-report detail says produced no report: the verb, and under
     pytest the runner too."""
-    return f"{verb} under {_PYTEST}" if runner == _PYTEST else verb
+    return _axi().pytest_no_report_subject(verb) if runner == _PYTEST else verb
 
 
 def _no_report_warning(verb, runner, result):
     """The shared no-report warning for a run that produced no report to
     file. Under pytest it names pytest and carries pytest's own error line."""
-    cause = _pytest_error_line(result.stdout) if runner == _PYTEST else None
+    cause = _axi().pytest_error_line(result.stdout) if runner == _PYTEST else None
     return _axi().no_report_warning(_no_report_subject(verb, runner),
                                     _no_report_artifact(runner),
                                     result.returncode, result.stdout or "",
@@ -1119,9 +1009,10 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     _axi().close_narration(narrator)
 
     # A pytest that failed as a runner wrote no result, whatever JUnit it left.
-    if (_produced_xml(reports_dir)
-            and not _pytest_failed_as_runner(runner, result)):
-        report_paths = _report_paths(reports_dir)
+    if (_axi().produced_junit(reports_dir)
+            and not (runner == _PYTEST
+                     and _axi().pytest_failed_as_runner(result.returncode))):
+        report_paths = _axi().junit_report_paths(reports_dir)
         # The client decides one thing locally, from the runner's exit and
         # the count of the report's test cases; everything else is the board's.
         # A run that caught a tripwire hit is filed whatever it ran.
@@ -1129,8 +1020,8 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
                 and _axi().ran_nothing(result.returncode,
                                        _axi().junit_testcase_count(report_paths))):
             return _axi().emit_ran_nothing(
-                verb, "TEST-*.xml", result.returncode, result.stdout or "",
-                run_id, envelope_warnings, post_fn=_post,
+                verb, _axi().JUNIT_REPORT_GLOB, result.returncode,
+                result.stdout or "", run_id, envelope_warnings, post_fn=_post,
                 project_key=_project_key(project_dir), agent_id=args.agent,
                 subject=_no_report_subject(verb, runner))
         runner_exit = _axi().runner_exit_code(result.returncode)
@@ -1162,7 +1053,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # additive, so a starved toolchain stops returning an exit code with empty
     # stdout. The exit code is untouched (AC5).
     _emit_axi(verb, False,
-              {"help": _axi().no_report_help(verb, "TEST-*.xml")},
+              {"help": _axi().no_report_help(verb, _axi().JUNIT_REPORT_GLOB)},
               _axi_context(project_dir, agent_id=args.agent),
               envelope_warnings
               + [_no_report_warning(verb, runner, result)],
@@ -1315,8 +1206,9 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     envelope_warnings = preflight_warnings + watch.warnings()
 
     # A pytest that failed as a runner wrote no result, whatever JUnit it left.
-    if (_pytest_failed_as_runner(runner, result)
-            or not _produced_xml(reports_dir)):
+    if ((runner == _PYTEST
+            and _axi().pytest_failed_as_runner(result.returncode))
+            or not _axi().produced_junit(reports_dir)):
         # A hermetic run that caught a tripwire hit is filed with its leaks.
         if _axi().pending_hermetic_run_leaks():
             _axi().close_narration(narrator)
@@ -1342,7 +1234,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                       _axi_context(project_dir, agent_id=args.agent),
                       envelope_warnings + [warning]
                       + _axi().no_report_left_open_warnings(
-                          run_id, "TEST-*.xml", post_fn=_post,
+                          run_id, _axi().JUNIT_REPORT_GLOB, post_fn=_post,
                           project_key=_project_key(project_dir),
                           agent_id=args.agent))
             return result.returncode or 1
@@ -1359,14 +1251,15 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # regression step, so a starved GATE must speak as the gate. The
         # `no-tests-discovered` branch above keeps its own code (AC7).
         _emit_axi(verb, False,
-                  {"help": _axi().no_report_help(verb, "TEST-*.xml")},
+                  {"help": _axi().no_report_help(verb,
+                                                 _axi().JUNIT_REPORT_GLOB)},
                   _axi_context(project_dir, agent_id=args.agent),
                   envelope_warnings
                   + [_no_report_warning(verb, runner, result)],
                   f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
-    report_paths = _report_paths(reports_dir)
+    report_paths = _axi().junit_report_paths(reports_dir)
     # The client decides one thing locally, from the runner's exit and the
     # count of the report's test cases; everything else is the board's.
     # A run that caught a tripwire hit is filed whatever it ran.
@@ -1374,7 +1267,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
             and _axi().ran_nothing(result.returncode,
                                    _axi().junit_testcase_count(report_paths))):
         return _axi().emit_ran_nothing(
-            verb, "TEST-*.xml", result.returncode, result.stdout or "",
+            verb, _axi().JUNIT_REPORT_GLOB, result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,
             project_key=_project_key(project_dir), agent_id=args.agent,
             subject=_no_report_subject(verb, runner))
@@ -1573,17 +1466,18 @@ def cmd_auto_ingest(args):
     # it takes no `--runner` and never probes for pytest.
     runner = _resolve_runner(args, project_dir, probe=False)
     reports_dir = _reports_dir(project_dir, args.reports)
-    if not _produced_xml(reports_dir):
-        print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest",
+    junit_glob = _axi().JUNIT_REPORT_GLOB
+    if not _axi().produced_junit(reports_dir):
+        print(f"[crucible] no {junit_glob} in {reports_dir} — nothing to ingest",
               file=sys.stderr)
         # CR-CRU-064 §S2 — this verb runs NO runner of its own (it ingests a
         # pre-existing reports dir), so there is no capture to carry: the
         # helper's blank-capture form is the honest detail here.
         _emit_axi("auto-ingest", False,
-                  {"help": _axi().no_report_help("auto-ingest", "TEST-*.xml")},
+                  {"help": _axi().no_report_help("auto-ingest", junit_glob)},
                   _axi_context(project_dir, agent_id=args.agent),
-                  [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
-                  f"auto-ingest: ok=False — no TEST-*.xml in {reports_dir}")
+                  [_axi().no_report_warning("auto-ingest", junit_glob, 1, "")],
+                  f"auto-ingest: ok=False — no {junit_glob} in {reports_dir}")
         return 1
     # CR-CRU-094 §S3 — this verb runs no runner and offers no `--cycle`, so its
     # ingest is the furthest from the run that produced the reports and an
@@ -1595,7 +1489,8 @@ def cmd_auto_ingest(args):
     # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests reports it merely
     # found, so it cannot know their tier by construction and states none.
     # It ran no runner either, so it sends neither `raw` nor `runnerExit`.
-    resp = _file_reports(project_dir, args.agent, _report_paths(reports_dir),
+    resp = _file_reports(project_dir, args.agent,
+                         _axi().junit_report_paths(reports_dir),
                          runner=runner, context=_axi().cycle_context(
                              _run_context(), getattr(args, "cycle", None)))
     _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,

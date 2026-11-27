@@ -3,7 +3,7 @@ tests from its documented default `--start-dir tests` because `tests/` (and
 `tests/client/`) lack `__init__.py`, so `unittest discover -s tests` treats
 `tests/client/` as a non-package subdirectory and does NOT recurse into it --
 0 tests are collected. With 0 tests, xmlrunner writes no `TEST-*.xml`, so
-`_produced_xml` is False and the client falls into a masked "no JUnit XML
+`produced_junit` is False and the client falls into a masked "no JUnit XML
 produced -- ingesting as compile" branch instead of reporting the real
 zero-discovery condition.
 
