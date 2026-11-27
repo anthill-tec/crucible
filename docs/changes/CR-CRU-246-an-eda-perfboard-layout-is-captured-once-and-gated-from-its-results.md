@@ -3,7 +3,7 @@
 **Status:** PENDING · Pre-review: due — 8 points, user rulings, another project's surface
 **Type:** feature
 **Priority:** high. P1's CR-PFC-010 gates its layout through it.
-**Depends on:** CR-CRU-244
+**Depends on:** CR-CRU-276
 **Labels:** clients, eda, packaging
 **Phase:** design
 **Design reference:** CR-CRU-244 (the `crucible-gate` package and the `crucible-events` stream); CR-CRU-242 (the
@@ -114,12 +114,12 @@ runs in the project venv. In order, it:
 - **The schema:** `eda-perfboard` joins `stacks.eda`'s frameworks and `reserved_frameworks.eda`, and the
   schema's `version` goes up by one.
 - **The other stacks:** `eda-perfboard` joins the other-stack skip sets (rust, arduino and maven), as
-  `eda-gate` does in CR-CRU-244.
+  `eda-gate` does in CR-CRU-276.
 
 ### §S4 — the ingest and its checks
 
 For an `eda-perfboard` entry, the client runs `<interpreter> -m crucible_gate.perfboard ingest
---document <document> --results <results> [--height-limit-mm N]` through CR-CRU-244 §S4's run path:
+--document <document> --results <results> [--height-limit-mm N]` through CR-CRU-276 §S2's run path:
 
 - the version check;
 - the stream codec check;
@@ -153,14 +153,14 @@ The ingest reads the four check files and emits these checks, in this order:
 - **A `height_limit_mm` that differs** from the one in `check_heights`' `arguments`: `heights-under-limit`
   fails, naming both values.
 
-A declared entry never yields SKIP. The ingest's exit and envelope follow CR-CRU-244: `verdict`, `skipped[]`
+A declared entry never yields SKIP. The ingest's exit and envelope follow CR-CRU-276: `verdict`, `skipped[]`
 and the `tier-skipped` warning, as CR-CRU-242 §S5 defines them.
 
 ### §S5 — tiers, `regression` and the gate
 
 - **The tier verbs, `--entry` and the gate's per-entry suites** take `eda-perfboard` entries as they take
   the other eda frameworks. Each entry is one run and one gate row.
-- **`regression`** files one run per `eda-perfboard` entry under `regression`, alongside CR-CRU-244's runs.
+- **`regression`** files one run per `eda-perfboard` entry under `regression`, alongside CR-CRU-276's runs.
 - **Nothing in this CR captures.** No verb of the client runs the capture.
 
 ## Acceptance criteria
@@ -213,7 +213,7 @@ where a test needs one.
   - The schema lists `eda-perfboard` under `stacks.eda`, and its version is up by one.
   - The rust, arduino and maven readers skip an `eda-perfboard` entry.
 - [ ] **AC8 — tiers, `regression` and the gate.**
-  - With `module/layout` and CR-CRU-244's `module/board-check` declared, `module` opens two runs.
+  - With `module/layout` and CR-CRU-276's `module/board-check` declared, `module` opens two runs.
   - `regression` files one run per entry.
   - `pre-merge-gate` has one row per entry, each with `client: eda-crucible.py`.
   - A stale result fails only the `module/layout` row.
@@ -236,7 +236,7 @@ where a test needs one.
 - the ingest's 7 checks and its freshness rules;
 - one declaration framework.
 
-The run, the stream, the version check, the tiers and the gate come from CR-CRU-242 and CR-CRU-244.
+The run, the stream, the version check, the tiers and the gate come from CR-CRU-242 and CR-CRU-276.
 
 ## Risk
 
