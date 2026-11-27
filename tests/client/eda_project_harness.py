@@ -6,8 +6,16 @@ discovery never collects), never the checkout's copy. Its `crucible.toml`
 declares three eda entries (`unit` over `tests/unit`, `integration/net` over
 `tests/integ`, `e2e` over `tests/bench`); its `hardware/` sub-project declares
 its own. The committed tree names no board and holds no `.env`: each scratch
-copy is pointed at a `RecordingBoard` on loopback and given the `.env` its
-case needs, so no live board is ever touched and no project key is committed.
+copy is pointed at a `RecordingBoard` on loopback (or a throwaway real board,
+`tests/client/real_board.py`) and given the `.env` its case needs, so no live
+board is ever touched and no project key is committed.
+
+The fixture's `tests/sim` (two skipped tests) is declared by no entry of the
+committed `crucible.toml`: a case that needs `integration/sim` declares it in
+its own copy. The fixture's root `conftest.py` makes every pytest run on a
+copy append, at its start, one JSON line to `<copy>/child-env.jsonl` holding
+the values of `QT_QPA_PLATFORM`, `DISPLAY`, `WAYLAND_DISPLAY` and `COLUMNS`
+in the pytest child's own environment (`child_env_records`).
 
 The client is `clients/eda-crucible.py`, spawned from the suite's test install
 (`tests.client.client_script`) as an OS subprocess, in an environment scrubbed
@@ -61,6 +69,9 @@ DECLARATION_REFUSED_CODE = "declaration-refused"
 TIER_RUN_UNDECLARED_CODE = "tier-run-undeclared"
 #: The headless variables a pytest child's environment is checked for.
 WATCHED_ENV = ("QT_QPA_PLATFORM", "DISPLAY", "WAYLAND_DISPLAY")
+#: The file the fixture's root `conftest.py` appends each pytest child's own
+#: environment to, relative to the copy (pytest's rootdir).
+CHILD_ENV_RECORD = "child-env.jsonl"
 
 # Every variable that, inherited from the shell running this suite, would
 # steer the client or its children away from what a test states.
@@ -168,8 +179,9 @@ class EdaProject:
     """One scratch copy of the fixture (`self.dir`) on its own
     `RecordingBoard`. With `key`, `.env` carries the project key."""
 
-    def __init__(self, case, key=True, board=None):
+    def __init__(self, case, key=True, board=None, project_key=PROJECT_KEY):
         self.case = case
+        self.project_key = project_key
         self.root = scratch(case, "eda-project-")
         self.dir = os.path.join(self.root, "project")
         shutil.copytree(FIXTURE, self.dir,
@@ -180,7 +192,7 @@ class EdaProject:
         self.board = board
         self.point_at_board(self.dir)
         if key:
-            self.write_key(self.dir)
+            self.write_key(self.dir, project_key)
 
     # ── the project's files ────────────────────────────────────────────────
     @property
@@ -208,6 +220,24 @@ class EdaProject:
                   encoding="utf-8") as handle:
             handle.write("\n" + text.strip("\n") + "\n")
 
+    def write(self, rel, text):
+        """Write `text` to `rel` in this copy, creating its directories."""
+        path = Path(self.dir, rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def child_env_records(self):
+        """Every pytest child's own environment the fixture's root
+        `conftest.py` recorded on this copy, in run order: one dict per
+        pytest process, `{name: value or None}` over `WATCHED_ENV` and
+        `COLUMNS`."""
+        path = Path(self.dir, CHILD_ENV_RECORD)
+        if not path.is_file():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+
     def declare_only_the_board(self, project_dir=None):
         """Replace `project_dir`'s `crucible.toml` with one that names the
         board and declares no entry at all."""
@@ -223,11 +253,11 @@ class EdaProject:
         env.update({k: str(v) for k, v in extra.items()})
         return env
 
-    def drive(self, verb, *argv, cwd=None, project_dir=None, python=None,
-              agent=AGENT, client=None, env=None, timeout=TIMEOUT):
-        """Spawn the eda client's `verb` with `argv`. `project_dir` defaults
-        to this copy (False: no `--project-dir` at all); `python`, when
-        given, is passed as `--python`."""
+    def command(self, verb, *argv, project_dir=None, python=None, agent=AGENT,
+                client=None):
+        """The argv that spawns the eda client's `verb` with `argv`.
+        `project_dir` defaults to this copy (False: no `--project-dir` at
+        all); `python`, when given, is passed as `--python`."""
         cmd = [sys.executable, str(client or EDA_CLIENT), verb, *argv]
         if agent:
             cmd += ["--agent", agent]
@@ -235,10 +265,26 @@ class EdaProject:
             cmd += ["--project-dir", project_dir or self.dir]
         if python is not None:
             cmd += ["--python", str(python)]
+        return cmd
+
+    def drive(self, verb, *argv, cwd=None, project_dir=None, python=None,
+              agent=AGENT, client=None, env=None, timeout=TIMEOUT):
+        """Spawn the eda client's `verb` with `argv` (`command`) and wait
+        for it."""
+        cmd = self.command(verb, *argv, project_dir=project_dir, python=python,
+                           agent=agent, client=client)
         return subprocess.run(cmd, cwd=cwd or self.dir,
                               env=env if env is not None else self.env(),
                               capture_output=True, text=True, timeout=timeout,
                               check=False)
+
+    def spawn(self, verb, *argv, python=None, agent=AGENT, env=None):
+        """Start the eda client's `verb` with `argv` (`command`) without
+        waiting, its stdout and stderr piped, so a test can signal it."""
+        return subprocess.Popen(
+            self.command(verb, *argv, python=python, agent=agent),
+            cwd=self.dir, env=env if env is not None else self.env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # ── what the board was sent ────────────────────────────────────────────
     def posts(self):
