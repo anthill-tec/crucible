@@ -328,7 +328,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
         venv_python = self.venv_python
         if venv_python is None:
             self.fail("the scratch venv has no interpreter to run the install")
-        target = tempfile.mkdtemp(prefix="cr046-install-target-",
+        target = tempfile.mkdtemp(prefix="uv-env-gate-install-target-",
                                   dir=self.tmp_root)
         self.addCleanup(shutil.rmtree, target, ignore_errors=True)
         env = _sanitized_env()

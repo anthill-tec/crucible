@@ -92,7 +92,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # checkout and what the wheel force-includes as `crucible_axi/clients`.
 SOURCE_CLIENTS_DIR = CLIENT_SOURCE_DIR
 
-# §S1 -- the packaged fleet, exactly. Seven clients plus the shared modules
+# The packaged fleet, exactly. Seven clients plus the shared modules
 # they load by file path plus the status contract the manifest publishes.
 EXPECTED_FLEET_FILES = frozenset({
     "bun-crucible.py",
@@ -880,7 +880,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         on 0.1.2, where all six name package-external paths nothing created."""
         self.assertEqual(
             set(self.document.get("clients", {})), EXPECTED_CLIENT_STACKS,
-            f"AC3 -- the manifest must publish exactly the seven client stacks "
+            f"the manifest must publish exactly the seven client stacks "
             f"{sorted(EXPECTED_CLIENT_STACKS)}; got "
             f"{sorted(self.document.get('clients', {}))}")
         published = self.published_paths()
@@ -987,7 +987,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         clients = self.document["clients"]
         self.assertEqual(
             EXPECTED_CLIENT_STACKS, set(clients),
-            f"§S3 -- `clients` must map exactly the seven stacks; got "
+            f"`clients` must map exactly the seven stacks; got "
             f"{sorted(clients)}")
         non_strings = sorted(
             f"clients.{stack} -> {value!r}"

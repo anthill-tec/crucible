@@ -71,7 +71,7 @@ from tests.client import install_clients_candidates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# §S1 -- the packaged fleet, exactly. Seven clients plus the shared modules
+# The packaged fleet, exactly. Seven clients plus the shared modules
 # they load BY FILE PATH from their own directory plus the status contract the
 # manifest publishes as `status` plus (CR-CRU-138 §S4) the distribution's own
 # limit declarations, which travel as package data beside the module that
@@ -451,7 +451,7 @@ class CliMainInstallManifestResolvesTest(_CliInstallCase):
         clients = document.get("clients", {})
         self.assertEqual(
             set(CLIENT_STACKS), set(clients),
-            f"AC3/AC8 -- the manifest must publish all seven stacks; "
+            f"the manifest must publish all seven stacks; "
             f"got {sorted(clients)}. envelope:\n{stdout}")
         published = [clients[stack] for stack in CLIENT_STACKS]
         published.append(document.get("status"))
