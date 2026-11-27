@@ -1,6 +1,6 @@
 # CR-CRU-209 — repeated runs on the active cycle fold into one chip
 
-**Type** fix · **Points** 3 · **Wave** 9 (0.5.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** fix · **Points** 3 · **Wave** 9 (0.5.0) · **Depends on** — · **Status** COMPLETED (shipped 2026-11-27 on develop) — filed 2026-10-28
 (user-raised 2026-10-27; design ruling and release 2026-10-28; revised after gap analysis 2026-11-27)
 
 ## Problem
@@ -112,3 +112,23 @@ no existing assertion changes.
 - The Now pane's active cycle folds a run repeated back-to-back into one chip with a count and the
   latest run's time, so a re-run no longer reads as a duplicate. Back-to-back aborted runs by one
   agent fold the same way.
+
+## Close-out (2026-11-27)
+
+Plan 279.
+
+- **Gap analysis:** the five active-line test files were green at 56/56 before any change, and no existing test
+  drew two back-to-back repeats on the line. Two user rulings followed: aborted runs fold only with aborted runs,
+  and the chip's clock reads `Date.now()` at render. Points were raised from 2 to 3.
+- **Cycle 1035, RED/GREEN (§S1):** 17 unit tests, imported by name, so the type check holds the declaration.
+  `foldRepeatedRuns` is in `public/app-logic.mjs`, declared generic in `public/app-logic.d.mts`, and listed on
+  the `window.CrucibleLogic` bridge.
+- **Cycle 1036, RED/GREEN (§S2):** 9 integration tests on the app shell with the clock pinned; 6 failed for the
+  spec's reasons and 3 pinned what it keeps. `OpenSpan` draws one entry per chip, and `InlineRunEntry` appends
+  ` ×<n> <clockTime>` and `data-run-count` only for a count of two or more.
+- **Cycle 1037, VERIFY:** PASS, with no must-fix or should-fix findings and four notes.
+- **Cycle 1038, FIX (user-chosen notes):** a live re-fold over the stream (`×2` to `×3`), the phone layout, and
+  epoch-ms times in the unit fixtures. Each new test was shown to catch a break no earlier test catches.
+- **Pre-merge gate (cycle 1038):** 13,690 passed and 0 failed in about 24 minutes. By suite: bun 5,170, python
+  unit 2,723, python integration 5,797.
+- **CHANGELOG:** a `Changed` entry under `[Unreleased]`, added in this close-out by user ruling.
