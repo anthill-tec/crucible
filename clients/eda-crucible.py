@@ -42,8 +42,12 @@ What a run verb does:
   report, or aborted when it ran nothing. A signal aborts the open run and
   runs nothing more. One envelope states every run: its `verdict` (fail,
   skip or pass), `entries[]` for a tier verb, `events[]`, and the skipped
-  tests (`skipped[]`, at most SKIPPED_LIST_LIMIT, `skippedNotListed`). The
-  gate does not run its suites yet.
+  tests (`skipped[]`, at most SKIPPED_LIST_LIMIT, `skippedNotListed`). A
+  `unit` run whose wall clock is at or over twice its child CPU carries the
+  fleet's wall-vs-CPU warning. The gate runs each eda entry as its own
+  suite, exactly as that entry's tier verb runs it, and states every suite
+  in one envelope; `e2e` is listed and excluded, and `--hermetic` carries to
+  every suite.
 
 The project dir, in this order:
   --project-dir > $EDA_CRUCIBLE_PROJECT_DIR > the git repo of the working
@@ -442,14 +446,23 @@ def _declaration(args):
     return held
 
 
-def _no_entry_refusal(declaration):
-    """`(error, help)` for a project that declares no eda entry at all."""
-    return ((f"{declaration.path} declares no eda entry, so there is nothing "
-             f"to run; nothing was run"),
-            [(f'declare one: [targets."<tier>"] (or [targets."<tier>/<label>"]) '
-              f'with framework = "{EDA_FRAMEWORK}" and paths = ["<path>", …], '
-              f"in {declaration.path}"),
-             "status"])
+class _NoEdaEntry(_axi().TierRunUndeclared):
+    """The shared tier-run-undeclared hard stop, for a verb that runs every
+    eda entry (`regression`, the gate) on a project that declares none:
+    raised before anything is spawned or posted, so `run_verb` writes the
+    refusal and a gate that ran nothing records nothing. Its words name the
+    declaration file and where an eda entry goes."""
+
+    def __init__(self, verb, declaration):
+        super().__init__(verb, (), _TIER_DECLARATION_SURFACE.names)
+        self.detail = (f"{declaration.path} declares no eda entry, so "
+                       f"{verb} has nothing to run; nothing was run")
+        self.help = [
+            (f'declare one: [targets."<tier>"] (or [targets."<tier>/<label>"]) '
+             f'with framework = "{EDA_FRAMEWORK}" and paths = ["<path>", …], '
+             f"in {declaration.path}"),
+            "status"]
+        self.args = (self.detail,)
 
 
 # ── the interpreter: the project's, never this client's own ────────────────
@@ -690,10 +703,13 @@ def _run_pytest(verb, setting, key, selection, tier):
         progress.recognise, total=lambda: progress.selected)
     watch = _axi().PytestSubtestWatch(narrator)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    # The timing brackets the one pytest child alone, so a `unit` run that
+    # spent its wall clock waiting is told so; every other tier is not.
     try:
         with (_axi().abandon_trap(run_id),
               _axi().hermetic_wrap(cmd, setting.env, enabled=setting.hermetic,
-                                   project_dir=setting.project_dir) as wrapped):
+                                   project_dir=setting.project_dir) as wrapped,
+              _axi().ChildRunTiming() as timing):
             result = _axi().run_streamed(wrapped.cmd, setting.project_dir,
                                          wrapped.env, setting.log, watch,
                                          capture=True)
@@ -709,6 +725,7 @@ def _run_pytest(verb, setting, key, selection, tier):
     print(f"[crucible] pytest exit={result.returncode}", file=sys.stderr)
     _axi().close_narration(narrator)
     warnings += watch.warnings()
+    warnings += _axi().unit_run_wall_vs_cpu_warnings(tier, _STACK, timing)
     skipped = _skipped_tests(result.stdout)
     outcome = _axi().pytest_run_outcome(result.returncode, reports_dir)
     runner_exit = _axi().runner_exit_code(result.returncode)
@@ -845,6 +862,12 @@ def _run_entries(verb, args, entries, tier):
     setting, preflight, refused = _run_setting(verb, args)
     if refused is not None:
         return refused
+    return _run_entries_in(verb, setting, preflight, entries, tier)
+
+
+def _run_entries_in(verb, setting, preflight, entries, tier):
+    """`_run_entries` once its setting resolved: each entry its own pytest
+    run, in order, a signal stopping the rest; one envelope states them."""
     runs = []
     for entry in entries:
         run = _run_pytest(verb, setting, entry.key, list(entry.paths), tier)
@@ -901,11 +924,9 @@ def cmd_regression(args):
     """Every eda entry's paths (`e2e` included) as one run filed under
     `regression`; refused when the project declares no eda entry."""
     verb = "regression"
-    agent = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
     declaration = _declaration(args)
     if not declaration.entries:
-        return _refuse(verb, project_dir, agent, *_no_entry_refusal(declaration))
+        raise _NoEdaEntry(verb, declaration)
     selection = []
     for entry in declaration.entries:
         selection += [path for path in entry.paths if path not in selection]
@@ -913,9 +934,13 @@ def cmd_regression(args):
 
 
 def cmd_pre_merge_gate(args):
-    """ORCHESTRATOR pre-merge gate: one suite per eda entry, after the shared
-    refusal of a scoped gate that cannot run as asked; refused when the
-    project declares no eda entry."""
+    """ORCHESTRATOR pre-merge gate, its outcome recorded as the gate's
+    milestone. After the shared refusal of a scoped gate that cannot run as
+    asked, it composes the declared suites through the shared
+    `gate_regression`: each eda entry is a suite of its own, run as its tier
+    verb runs it and filed under its tier; `e2e` is listed and excluded;
+    `--suites` scopes it to the entries named. There is no whole-suite run.
+    A project that declares no eda entry is refused, recording nothing."""
     _axi().refuse_unrunnable_scoped_gate(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
         project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
@@ -924,21 +949,27 @@ def cmd_pre_merge_gate(args):
     project_dir = _resolve_project_dir(args.project_dir)
     declaration = _declaration(args)
     if not declaration.entries:
-        return _refuse(verb, project_dir, agent, *_no_entry_refusal(declaration))
-    python, refused = _resolved_python(verb, args)
+        raise _NoEdaEntry(verb, declaration)
+    setting, preflight, refused = _run_setting(verb, args)
     if refused is not None:
         return refused
-    return _refuse(
-        verb, project_dir, agent,
-        (f"{_entries_named(declaration.entries)} resolved, and {python} "
-         f"imports pytest, but this build of the eda client does not run the "
-         f"gate's suites yet; nothing was run"),
-        ["run each tier verb, or regression, in its place", "status"])
+    entries = {entry.key: entry for entry in declaration.entries}
 
+    def run_suite(suite):
+        entry = entries[suite.target]
+        return _run_entries_in(entry.tier, setting, preflight, (entry,),
+                               entry.tier)
 
-def _entries_named(entries):
-    """The eda entries `entries` as their declared tables."""
-    return "the eda entries " + ", ".join(f'[targets."{e.key}"]' for e in entries)
+    def whole_suite():
+        raise RuntimeError("an eda gate has no whole-suite run: every eda "
+                           "suite runs under a framework of its own")
+
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, verb=verb,
+        whole_suite=whole_suite, dispatch=None, run_suite=run_suite,
+        whole_framework=None,
+        context=_axi_context(project_dir, agent_id=agent),
+        crucible_url=_base_url)
 
 
 def cmd_auto_ingest(args):

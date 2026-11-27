@@ -1004,7 +1004,7 @@ _EDA_GATED_LEAK_SUITES = 4
 
 
 class EdaHermeticEndToEndTest(unittest.TestCase):
-    """AC1 and AC2 for eda -- real `eda-crucible.py <verb> --hermetic` on a
+    """The eda client's hermetic runs -- real `eda-crucible.py <verb> --hermetic` on a
     scratch copy of the eda fixture project, against the real scratch
     `RealBoard`: a leak on every run verb files a red run carrying the leak
     and a failing `tripwire` suite, and a clean run files green."""
