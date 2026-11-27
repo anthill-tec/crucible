@@ -61,14 +61,20 @@ and the passing-subtest watch. This CR lifts both first (§S0), so the eda clien
 
 Into `clients/_crucible_run.py`, standard library only, each a public name the clients reach through the core:
 
-- **The routing of a finished pytest run.** Given the runner's exit, its output and the reports dir, it does what
-  python's `_test_run` and `_regression_run` do inline today:
-  - files the JUnit when one was produced and pytest did not fail as a runner (exits 0, 1, 2);
-  - files a compile record carrying `pytest_error_line` when pytest failed as a runner (exits 3, 4);
-  - aborts the run as ran-nothing (`no-test-reports`) when no report was produced (exit 5, a signal).
-- **The passing-subtest watch:** the composition of `pytest_reports_passing_subtest` and
-  `PYTEST_SUBTESTS_UNCOUNTED_DETAIL` that python's `_FallbackWatch` holds, giving the `subtests-uncounted`
-  warning.
+- **The outcome of a finished pytest run,** `pytest_run_outcome(returncode, reports_dir)`. It answers the decision
+  python's `_test_run` and `_regression_run` make inline today, and each client acts on it with its own filing:
+  - **file the JUnit** when one was produced, pytest did not fail as a runner, and it ran something (exits 0, 1,
+    2);
+  - **ran nothing** when the JUnit holds no test case and no hermetic leak is pending (exit 5): the run is
+    aborted through the shared `emit_ran_nothing` (`no-test-reports`);
+  - **no result** when pytest failed as a runner (exits 3, 4) or left no JUnit (a child killed by a signal): a
+    compile record carrying `pytest_error_line` is filed, after the caller's own hermetic-leak check.
+
+  A signal to the client itself is the shared abandon trap's, as today.
+- **The passing-subtest watch,** `PytestSubtestWatch(narrator=None)`: the composition of
+  `pytest_reports_passing_subtest` and `PYTEST_SUBTESTS_UNCOUNTED_DETAIL` that python's `_FallbackWatch` holds.
+  It passes every line to the narrator, and its `warnings()` gives `subtests-uncounted` once a passing subtest was
+  seen.
 - **A headless environment for the import probe:** `pytest_importable` takes an optional `env`, used for the
   probe's child; without one it behaves as today.
 - **A labelled key's tier.** The shared reader of a declared key's tier answers the first segment of
@@ -221,8 +227,8 @@ with pytest (built once per test class, distinct from the suite's own `sys.execu
 The fixture's test files are not collected by this repo's own discovery.
 
 - [ ] **AC0 — the lift (§S0).**
-  - The shared routing files exits 0/1/2, records exits 3/4 with the error line, and aborts exit 5 and a
-    signal as ran-nothing, each asserted through a client run.
+  - `pytest_run_outcome` answers file for exits 0/1/2 with cases, ran-nothing for a JUnit with no case, and
+    no-result for exits 3/4 and for no JUnit, whatever JUnit a runner failure left.
   - The shared subtest watch gives `subtests-uncounted` for output with passing subtests, and nothing otherwise.
   - `pytest_importable(python, cwd, env=…)` runs the probe with that environment (recorded by a stub
     interpreter); without `env` it is unchanged.
