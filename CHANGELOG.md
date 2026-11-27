@@ -53,6 +53,12 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Changed
 
+- **The python client's pytest path lives once, in the shared run module.** The pytest argv, its console
+  progress, the passing-subtest sign, the exit classification, the import probe, the JUnit report lookup and
+  wipe, and the no-report wording are now public names of `clients/_crucible_run.py`, which every client reaches.
+  The python client calls them, and its behaviour is unchanged: the same argv, narration, warnings, exits and
+  refusals. The probe now answers a timeout itself, and `pytest_probe_timeout()` names the timeout it used.
+
 - **A run repeated back-to-back on the active cycle folds into one chip.** In the Workflow tab's Now pane,
   the active cycle's line folds consecutive settled runs by one agent with equal passed, failed and total figures
   into one chip, `<agent> <passed>/<total> ×<n> <time>`, so a re-run no longer reads as a duplicate. The chip is
