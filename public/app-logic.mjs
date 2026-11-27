@@ -887,6 +887,38 @@ export function isTestRun(e) {
 }
 
 /**
+ * Folds consecutive repeated settled runs into chips `{ run, count }`, in
+ * input order (oldest first). Two consecutive runs repeat when they share an
+ * `agentId` and either neither is aborted and their `passed`, `failed` and
+ * `total` are all equal, or both are aborted (whatever their figures). A chip
+ * carries the LATEST run of its sequence (the object passed in) and the
+ * sequence's length. Pure: the input is never mutated; non-array input
+ * reads as no runs.
+ */
+export function foldRepeatedRuns(runs) {
+  if (!Array.isArray(runs)) return [];
+  const isAborted = (run) => run.status === "aborted";
+  const repeats = (previous, run) => {
+    if (previous.agentId !== run.agentId) return false;
+    if (isAborted(previous) || isAborted(run)) return isAborted(previous) && isAborted(run);
+    return (
+      previous.passed === run.passed && previous.failed === run.failed && previous.total === run.total
+    );
+  };
+  const chips = [];
+  for (const run of runs) {
+    const open = chips[chips.length - 1];
+    if (open !== undefined && repeats(open.run, run)) {
+      open.run = run;
+      open.count += 1;
+    } else {
+      chips.push({ run, count: 1 });
+    }
+  }
+  return chips;
+}
+
+/**
  * §S3 — the history lens tree (pure): Wave → [Track] → CR → Cycle.
  * Declared-plan first — where a plan exists the tree IS the plan; inferred
  * fallback (context.wave + agent stem + context.cycle) where none does;
@@ -1889,6 +1921,7 @@ if (typeof window !== "undefined") {
     planCycleIndex,
     timelineRows,
     isTestRun,
+    foldRepeatedRuns,
     workflowLens,
     gateDecisionSummaryText,
     waveLatestSealedGate,

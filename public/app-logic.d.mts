@@ -440,6 +440,21 @@ export declare function pairTransitions<T extends TransitionEventLike>(
 /** A run is a test run; every other event kind is never drawn or counted as one. */
 export declare function isTestRun(e: { kind: string }): boolean;
 
+/** One chip of folded runs: the latest run of a sequence of consecutive
+ *  repeats (the very object passed in) and how many runs the sequence holds. */
+export interface FoldedRunChip<T> {
+  run: T;
+  count: number;
+}
+
+/** Folds consecutive repeated settled runs (oldest first) into chips, in
+ *  input order. Two consecutive runs repeat when they share an `agentId` and
+ *  either neither is aborted and their `passed`/`failed`/`total` are all
+ *  equal, or both are aborted (whatever their figures). Pure; non-array
+ *  input gives `[]`. */
+export declare function foldRepeatedRuns<T>(runs: readonly T[]): FoldedRunChip<T>[];
+export declare function foldRepeatedRuns(runs: unknown): FoldedRunChip<unknown>[];
+
 // CR-CRU-011 C4 — §S0b timeline plan integration + §S3 history lens (pure).
 export interface LensRunLike {
   id: string;
