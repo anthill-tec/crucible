@@ -6256,11 +6256,17 @@
     // orchestrator confirm`. Inline-level entries (span, `app-inline-run`),
     // literal `·` text-node separators, NO per-run age stamp (the mock has
     // none — the stacked block rows with "ago" were the drift this fixes).
-    const InlineRunEntry = (e) =>
+    // A repeated run folds into one chip: `count` is how many consecutive
+    // repeats the chip stands for, `e` the latest of them (its id, colour and
+    // click). A count of two or more appends `×<n>` and the latest run's
+    // clock time (not an age) and carries `data-run-count`; a count of one
+    // renders the plain entry.
+    const InlineRunEntry = (e, count = 1) =>
       span(
         {
           "data-testid": "linked-run-row",
           "data-run-id": e.id,
+          ...(count > 1 ? { "data-run-count": String(count) } : {}),
           class: "app-inline-run",
           onclick: () => openDrillin(e.id),
         },
@@ -6282,6 +6288,12 @@
               { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
               `${e.passed}/${e.total}`,
             ),
+        count > 1
+          ? span(
+              { class: "app-card-meta" },
+              ` ×${count} ${L.clockTime(e.timestamp, Date.now())}`,
+            )
+          : null,
       );
 
     // CR-CRU-017 §S3 — the same inline entry for a run that is STILL RUNNING:
@@ -6321,13 +6333,15 @@
     // CR-CRU-017 §S3 — a currently-RUNNING run counts as content for the same
     // reason: the active cycle's span must show it live. So the span renders
     // when there is either a settled linked run or a running one.
+    // Consecutive repeated settled runs fold into one chip with a count and
+    // the latest run's clock time; running entries never fold.
     const OpenSpan = (cycleId) => {
       const runs = linkedRunsFor(cycleId);
       const running = runningRunsFor(cycleId);
       if (runs.length === 0 && running.length === 0) return null;
       const parts = [];
-      for (const run of runs) {
-        parts.push(InlineRunEntry(run), " · ");
+      for (const chip of L.foldRepeatedRuns(runs)) {
+        parts.push(InlineRunEntry(chip.run, chip.count), " · ");
       }
       // Running entries come LAST in this chronological flow: they started
       // after everything already settled in the span.
