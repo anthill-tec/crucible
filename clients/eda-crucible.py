@@ -31,11 +31,19 @@ Subcommands:
   plan / cycle / status verbs, the roadmap verbs and `next`: the fleet's
                         shared implementations, one thin delegator each.
 
-What a run verb does today:
+What a run verb does:
   It resolves the project dir, its key, its declaration and its interpreter,
-  probes that the interpreter imports pytest, and then answers ok:false
-  saying the eda entries are not run by this build yet: nothing is run and
-  nothing is opened on the board.
+  and probes that the interpreter imports pytest. A tier verb then runs each
+  of its entries (or the one --entry names) as its own pytest run, in key
+  order; `regression` runs every entry's paths once, as one run; `test` runs
+  its --tests. Each run is opened on the board before pytest starts, headless
+  and EDA_PYTEST_COLUMNS wide, and is filed by how pytest exited: its JUnit
+  report, a compile record when pytest failed as a runner or wrote no
+  report, or aborted when it ran nothing. A signal aborts the open run and
+  runs nothing more. One envelope states every run: its `verdict` (fail,
+  skip or pass), `entries[]` for a tier verb, `events[]`, and the skipped
+  tests (`skipped[]`, at most SKIPPED_LIST_LIMIT, `skippedNotListed`). The
+  gate does not run its suites yet.
 
 The project dir, in this order:
   --project-dir > $EDA_CRUCIBLE_PROJECT_DIR > the git repo of the working
@@ -78,7 +86,9 @@ import argparse  # noqa: I001
 import collections
 import importlib.util
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tomllib
@@ -109,6 +119,29 @@ _NODE_ID_SEPARATOR = "::"
 # Qt told to draw offscreen, so no tool a gate drives can open a window.
 _HEADLESS_SET = {"QT_QPA_PLATFORM": "offscreen"}
 _HEADLESS_UNSET = ("DISPLAY", "WAYLAND_DISPLAY")
+
+#: The terminal width every pytest child is told it has, so no `-v` line (a
+#: skip's reason above all) is cut to fit the terminal the client was given.
+EDA_PYTEST_COLUMNS = 4096
+
+#: The most skipped tests an envelope lists; the rest are counted in
+#: `skippedNotListed`.
+SKIPPED_LIST_LIMIT = 20
+
+# A run's verdict: it failed, every test it ran was skipped, or it passed.
+VERDICT_FAIL = "fail"
+VERDICT_SKIP = "skip"
+VERDICT_GREEN = "pass"
+
+# The warning a run whose every test was skipped carries.
+_TIER_SKIPPED_CODE = "tier-skipped"
+
+# pytest's `-v` line for one skipped test: `<node id> SKIPPED (<reason>)`,
+# then the progress marker. The reason is everything up to the line's last
+# closing parenthesis before that marker.
+_PYTEST_SKIPPED_LINE = re.compile(
+    r"^(?P<test>\S+::\S+) SKIPPED(?: \((?P<reason>.*)\))?"
+    r"(?:\s+\[\s*\d+%\])?\s*$")
 
 
 def _resolve_project_dir(arg_value):
@@ -496,12 +529,11 @@ def _refuse_unattributed(args, project_dir, agent):
         release=getattr(args, "release", None), context=None)
 
 
-def _resolved_run(verb, args, what):
+def _resolved_python(verb, args):
     """The steps every run verb takes once its declaration is read: the
     unattributed-run refusal, then the interpreter and its pytest probe, each
-    refused before anything is posted. `what` names what the run would cover.
-    This build runs no eda entry: a resolved run is answered ok:false,
-    nothing run and nothing opened on the board."""
+    refused before anything is posted. Returns `(python, None)`, or `(None,
+    exit)` once a refusal was written."""
     agent = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     declaration = _declaration(args)
@@ -509,12 +541,327 @@ def _resolved_run(verb, args, what):
     python = _resolve_python(args, project_dir, declaration)
     refused = _interpreter_refusal(python, project_dir, declaration)
     if refused is not None:
-        return _refuse(verb, project_dir, agent, *refused)
-    return _refuse(
-        verb, project_dir, agent,
-        (f"{what} resolved, and {python} imports pytest, but this build of the "
-         f"eda client does not run eda entries yet; nothing was run"),
-        ["re-run once the eda client runs its entries", "status"])
+        return None, _refuse(verb, project_dir, agent, *refused)
+    return python, None
+
+
+# ── the runs: one pytest per eda entry, filed by how pytest exited ──────────
+
+
+#: What every pytest run of one invocation shares: where it runs, under whom,
+#: with which interpreter and environment, and where its reports go.
+_RunSetting = collections.namedtuple(
+    "_RunSetting",
+    ("project_dir", "project_key", "agent", "python", "env", "reports_dir",
+     "context", "release", "log", "hermetic"))
+
+#: One pytest run's result: the key it ran (an entry's, or the verb's), its
+#: verdict, the figures the board filed (None when it filed none), the board's
+#: answer to its filing (None when it filed none), its warnings, its skipped
+#: tests, whether it was filed with counts, and the signal and run id when a
+#: signal ended it.
+_PytestRun = collections.namedtuple(
+    "_PytestRun",
+    ("key", "verdict", "figures", "resp", "warnings", "skipped", "filed",
+     "signum", "run_id"),
+    defaults=(None, None))
+
+
+def _pytest_env():
+    """The environment of a pytest child: headless, and told its terminal is
+    `EDA_PYTEST_COLUMNS` wide."""
+    env = _headless_env()
+    env["COLUMNS"] = str(EDA_PYTEST_COLUMNS)
+    return env
+
+
+def _run_setting(verb, args):
+    """The `_RunSetting` of a run verb, once its interpreter resolved and its
+    pre-flight attribution was read; `(setting, preflight warnings, None)`,
+    or `(None, None, exit)` once a refusal was written."""
+    python, refused = _resolved_python(verb, args)
+    if refused is not None:
+        return None, None, refused
+    agent = _agent_id(args)
+    project_dir = _resolve_project_dir(args.project_dir)
+    project_key = _project_key(project_dir)
+    cycle_id = getattr(args, "cycle", None)
+    release = getattr(args, "release", None)
+    context = _axi().cycle_context(_axi().run_context(), cycle_id)
+    preflight = _axi().preflight_cycle_warnings(
+        _get, project_key, agent, cycle_id=cycle_id, context=context,
+        release=release)
+    reports_dir = _axi().run_reports_dir(project_dir, args.reports, agent)
+    os.makedirs(reports_dir, exist_ok=True)
+    setting = _RunSetting(
+        project_dir=project_dir, project_key=project_key, agent=agent,
+        python=python, env=_pytest_env(), reports_dir=reports_dir,
+        context=context, release=release, log=getattr(args, "log", None),
+        hermetic=bool(getattr(args, "hermetic", False)))
+    return setting, list(preflight), None
+
+
+def _skipped_tests(output):
+    """Every `{test, reason}` pytest's `-v` output reports as skipped, in
+    output order; `reason` is None when the line carries none."""
+    found = []
+    for line in (output or "").splitlines():
+        match = _PYTEST_SKIPPED_LINE.match(line.rstrip("\r"))
+        if match:
+            found.append({"test": match.group("test"),
+                          "reason": match.group("reason")})
+    return found
+
+
+def _figures(resp):
+    """The figures the board filed a run with (`RUN_FIGURE_KEYS`), each an
+    int or None."""
+    filed = _axi().filed_run(resp)
+    return {key: (filed.get(key) if isinstance(filed.get(key), int)
+                  and not isinstance(filed.get(key), bool) else None)
+            for key in _axi().RUN_FIGURE_KEYS}
+
+
+def _filed_verdict(resp):
+    """The verdict of a run the board answered the filing of: `fail` when it
+    did not file it or filed a failure, `skip` when it filed only skipped
+    tests, else `pass`."""
+    if not (resp or {}).get("ok"):
+        return VERDICT_FAIL
+    figures = _figures(resp)
+    passed, failed, pending = (figures["passed"], figures["failed"],
+                               figures["pending"])
+    if isinstance(failed, int) and failed > 0:
+        return VERDICT_FAIL
+    if passed == 0 and failed == 0 and isinstance(pending, int) and pending > 0:
+        return VERDICT_SKIP
+    return VERDICT_GREEN
+
+
+def _board_warnings(resp):
+    """The warnings the board's answer carries."""
+    return [w for w in ((resp or {}).get("warnings") or []) if isinstance(w, dict)]
+
+
+def _no_report_warning(verb, result):
+    """The shared no-report warning for a pytest run that left nothing to
+    file, carrying pytest's own error line."""
+    output = result.stdout or ""
+    return _axi().no_report_warning(
+        _axi().pytest_no_report_subject(verb), _axi().JUNIT_REPORT_GLOB,
+        result.returncode, output, cause=_axi().pytest_error_line(output))
+
+
+def _file_compile(setting, run_id, result):
+    """File a pytest run that left no result as a compile record carrying
+    its captured output (pytest's error line among it), closing `run_id`."""
+    payload = {"projectKey": setting.project_key, "format": "python",
+               "errors": ((result.stdout or "").strip()
+                          or _axi().PYTEST_NO_REPORT_TEXT),
+               "agentId": setting.agent}
+    if setting.context:
+        payload["context"] = setting.context
+    if run_id:
+        payload["runId"] = run_id
+    resp = _axi().post_ingest(_post, _axi().COMPILE_INGEST_PATH, payload,
+                              stack=_STACK, release=setting.release)
+    print(f"ingest compile ({_STACK}): ok={resp.get('ok')}"
+          + (f" error={resp['error']}" if resp.get("error") else ""),
+          file=sys.stderr)
+
+
+def _run_pytest(verb, setting, key, selection, tier):
+    """One pytest run over `selection`, opened under `tier` before pytest is
+    spawned and filed by how pytest exited (`pytest_run_outcome`): its JUnit
+    filed, a run that ran nothing aborted, a runner failure or a run with no
+    JUnit filed as a compile record. A signal while it runs aborts it.
+    Returns its `_PytestRun`, named `key`."""
+    reports_dir = setting.reports_dir
+    _axi().wipe_junit_reports(reports_dir)
+    cmd = _axi().pytest_command(setting.python, reports_dir, selection)
+    run_id, warnings = _axi().open_run(
+        _post, setting.project_key, setting.agent, _STACK, tier=tier,
+        context=setting.context, release=setting.release,
+        framework=EDA_FRAMEWORK)
+    warnings = list(warnings)
+    progress = _axi().PytestProgress()
+    narrator = _axi().RunNarrator(
+        _axi().narration_poster(_post, setting.project_key, setting.agent),
+        progress.recognise, total=lambda: progress.selected)
+    watch = _axi().PytestSubtestWatch(narrator)
+    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    try:
+        with (_axi().abandon_trap(run_id),
+              _axi().hermetic_wrap(cmd, setting.env, enabled=setting.hermetic,
+                                   project_dir=setting.project_dir) as wrapped):
+            result = _axi().run_streamed(wrapped.cmd, setting.project_dir,
+                                         wrapped.env, setting.log, watch,
+                                         capture=True)
+    except _axi().RunAbandoned as abandoned:
+        signame = _signal_name(abandoned.signum)
+        closing = ([_axi().abort_run(_post, setting.project_key, setting.agent,
+                                     run_id,
+                                     f"{signame} interrupted the wrapped run")]
+                   if run_id is not None else [])
+        return _PytestRun(key, VERDICT_FAIL, None, None,
+                          warnings + watch.warnings() + closing, [], False,
+                          signum=abandoned.signum, run_id=run_id)
+    print(f"[crucible] pytest exit={result.returncode}", file=sys.stderr)
+    _axi().close_narration(narrator)
+    warnings += watch.warnings()
+    skipped = _skipped_tests(result.stdout)
+    outcome = _axi().pytest_run_outcome(result.returncode, reports_dir)
+    runner_exit = _axi().runner_exit_code(result.returncode)
+    if outcome == _axi().PYTEST_OUTCOME_FILE:
+        resp = _axi().ingest_reports(
+            _post, _get, stack=_STACK, project_key=setting.project_key,
+            agent_id=setting.agent, codec=JUNIT_CODEC,
+            report_paths=_axi().junit_report_paths(reports_dir),
+            raw=result.stdout, tier=tier, context=setting.context,
+            run_id=run_id, release=setting.release, runner_exit=runner_exit,
+            framework=EDA_FRAMEWORK)
+        return _PytestRun(key, _filed_verdict(resp), _figures(resp), resp,
+                          warnings + _board_warnings(resp), skipped,
+                          bool(resp.get("ok")))
+    if outcome == _axi().PYTEST_OUTCOME_RAN_NOTHING:
+        warnings += _axi().no_report_left_open_warnings(
+            run_id, _axi().JUNIT_REPORT_GLOB, post_fn=_post,
+            project_key=setting.project_key, agent_id=setting.agent)
+        return _PytestRun(key, VERDICT_FAIL, None, None,
+                          warnings + [_no_report_warning(verb, result)],
+                          skipped, False)
+    # A hermetic run that caught a tripwire hit is filed with its leaks.
+    leaked = _axi().file_leaked_run(
+        _post, stack=_STACK, project_key=setting.project_key,
+        agent_id=setting.agent, run_id=run_id, raw=result.stdout or None,
+        runner_exit=runner_exit, tier=tier, context=setting.context,
+        release=setting.release, framework=EDA_FRAMEWORK)
+    if leaked is not None:
+        return _PytestRun(key, VERDICT_FAIL, _figures(leaked), leaked,
+                          warnings + _board_warnings(leaked)
+                          + [_no_report_warning(verb, result)], skipped, False)
+    _file_compile(setting, run_id, result)
+    return _PytestRun(key, VERDICT_FAIL, None, None,
+                      warnings + [_no_report_warning(verb, result)], skipped,
+                      False)
+
+
+def _signal_name(signum):
+    """The name of the signal `signum` (`SIGTERM`)."""
+    return signal.Signals(signum).name
+
+
+def _verdict_of(runs):
+    """The verdict of several runs: `fail` if any failed, `skip` if every one
+    is a skip, else `pass`."""
+    verdicts = [run.verdict for run in runs]
+    if not verdicts or VERDICT_FAIL in verdicts:
+        return VERDICT_FAIL
+    if all(v == VERDICT_SKIP for v in verdicts):
+        return VERDICT_SKIP
+    return VERDICT_GREEN
+
+
+def _summed_figures(runs):
+    """The sum of the runs' filed figures; a figure no run filed is None."""
+    summed = {}
+    for key in _axi().RUN_FIGURE_KEYS:
+        values = [run.figures[key] for run in runs
+                  if run.figures is not None and run.figures.get(key) is not None]
+        summed[key] = sum(values) if values else None
+    return summed
+
+
+def _run_warnings(preflight, runs):
+    """An envelope's warnings: the pre-flight's, then each run's, one
+    `tier-skipped` per run whose every test was skipped, and each code a run
+    carries without detail of its own (`subtests-uncounted`) once."""
+    warnings = list(preflight)
+    once = {"subtests-uncounted"}
+    seen = set()
+    for run in runs:
+        for warning in run.warnings:
+            code = warning.get("code")
+            if code in once:
+                if code in seen:
+                    continue
+                seen.add(code)
+            warnings.append(warning)
+        if run.verdict == VERDICT_SKIP:
+            total = run.figures.get("total") if run.figures else None
+            warnings.append({"code": _TIER_SKIPPED_CODE,
+                             "detail": f"{run.key}: all {total} tests skipped"})
+    return warnings
+
+
+def _emit_runs(verb, setting, preflight, runs, *, keyed):
+    """The ONE envelope of a run verb over its pytest `runs`: the summed
+    `run` block, its `verdict`, `entries[]` (when `keyed`: one per entry
+    run), every filed run's event, and the skipped tests listed up to
+    `SKIPPED_LIST_LIMIT`. A signal that ended a run names it, and the exit is
+    128+signal; otherwise the exit is 1 on `fail` and 0 otherwise."""
+    verdict = _verdict_of(runs)
+    signalled = next((run for run in runs if run.signum is not None), None)
+    skipped = [item for run in runs for item in run.skipped]
+    fields = {"run": _summed_figures(runs),
+              "help": (_axi().run_left_open_help() if signalled is not None
+                       else _axi().HELP_STEPS.get(verb, ["status"])),
+              "verdict": verdict}
+    if keyed:
+        fields["entries"] = [
+            {"key": run.key, "verdict": run.verdict,
+             **{k: (run.figures or {}).get(k)
+                for k in ("passed", "failed", "pending")},
+             "event": (run.resp or {}).get("event") if run.filed else None}
+            for run in runs]
+    fields["events"] = _axi().filed_run_events()
+    fields["skipped"] = skipped[:SKIPPED_LIST_LIMIT]
+    fields["skippedNotListed"] = max(0, len(skipped) - SKIPPED_LIST_LIMIT)
+    if signalled is not None:
+        fields["signal"] = _signal_name(signalled.signum)
+        if signalled.run_id is not None:
+            fields["runId"] = signalled.run_id
+    errors = [run.resp.get("error") for run in runs
+              if run.resp is not None and run.resp.get("error") is not None]
+    if errors:
+        fields["error"] = errors[0]
+    filed = [run.resp for run in runs if run.filed]
+    ok = signalled is None and all(run.filed for run in runs)
+    _emit_axi(verb, ok, fields,
+              _axi_context(setting.project_dir, agent_id=setting.agent,
+                           cycle_id=_axi().echoed_cycle_id(filed[-1])
+                           if filed else _AXI_UNSET),
+              _run_warnings(preflight, runs),
+              f"{verb}: ok={ok} verdict={verdict}")
+    if signalled is not None:
+        return 128 + signalled.signum
+    return 1 if verdict == VERDICT_FAIL else 0
+
+
+def _run_entries(verb, args, entries, tier):
+    """A tier verb's run: each of `entries` its own pytest run over its
+    paths, filed under `tier`, in key order. A signal stops the entries
+    still to run. One envelope states them all."""
+    setting, preflight, refused = _run_setting(verb, args)
+    if refused is not None:
+        return refused
+    runs = []
+    for entry in entries:
+        run = _run_pytest(verb, setting, entry.key, list(entry.paths), tier)
+        runs.append(run)
+        if run.signum is not None:
+            break
+    return _emit_runs(verb, setting, preflight, runs, keyed=True)
+
+
+def _run_selection(verb, args, selection, tier):
+    """One pytest run over `selection`, filed under `tier` (None: no tier),
+    stated in one envelope."""
+    setting, preflight, refused = _run_setting(verb, args)
+    if refused is not None:
+        return refused
+    run = _run_pytest(verb, setting, verb, list(selection), tier)
+    return _emit_runs(verb, setting, preflight, [run], keyed=False)
 
 
 # ── verbs ────────────────────────────────────────────────────────────────────
@@ -547,7 +894,7 @@ def cmd_test(args):
             "nothing was run",
             [f"name them: test --tests <path or node id> …, or run a tier verb "
              f"({', '.join(_entry_tiers())}, regression)"])
-    return _resolved_run(verb, args, f"the selection {' '.join(args.tests)}")
+    return _run_selection(verb, args, args.tests, None)
 
 
 def cmd_regression(args):
@@ -559,7 +906,10 @@ def cmd_regression(args):
     declaration = _declaration(args)
     if not declaration.entries:
         return _refuse(verb, project_dir, agent, *_no_entry_refusal(declaration))
-    return _resolved_run(verb, args, _entries_named(declaration.entries))
+    selection = []
+    for entry in declaration.entries:
+        selection += [path for path in entry.paths if path not in selection]
+    return _run_selection(verb, args, selection, verb)
 
 
 def cmd_pre_merge_gate(args):
@@ -575,7 +925,15 @@ def cmd_pre_merge_gate(args):
     declaration = _declaration(args)
     if not declaration.entries:
         return _refuse(verb, project_dir, agent, *_no_entry_refusal(declaration))
-    return _resolved_run(verb, args, _entries_named(declaration.entries))
+    python, refused = _resolved_python(verb, args)
+    if refused is not None:
+        return refused
+    return _refuse(
+        verb, project_dir, agent,
+        (f"{_entries_named(declaration.entries)} resolved, and {python} "
+         f"imports pytest, but this build of the eda client does not run the "
+         f"gate's suites yet; nothing was run"),
+        ["run each tier verb, or regression, in its place", "status"])
 
 
 def _entries_named(entries):
@@ -609,7 +967,8 @@ def cmd_auto_ingest(args):
         verb, resp,
         _axi_context(project_dir, agent_id=args.agent,
                      cycle_id=_axi().echoed_cycle_id(resp)),
-        _emit_axi, warnings=preflight_warnings, fields={})
+        _emit_axi, warnings=preflight_warnings,
+        fields={"verdict": _filed_verdict(resp)})
     return 0 if resp.get("ok") else 1
 
 
@@ -623,8 +982,26 @@ def _read_declared_entries(args, target):
 
 
 def _run_declared_entries(args, tier, entries):
-    """A tier verb's run over its declared `entries`."""
-    return _resolved_run(tier, args, _entries_named(entries))
+    """A tier verb's run over its declared `entries`, or the one `--entry`
+    names; an `--entry` that is not one of them is refused before anything
+    is posted."""
+    named = getattr(args, "entry", None)
+    if named is not None:
+        chosen = tuple(e for e in entries if e.key == named)
+        if not chosen:
+            project_dir = _resolve_project_dir(args.project_dir)
+            other = next((e for e in _declaration(args).entries
+                          if e.key == named), None)
+            reason = (f"--entry {named} is a {other.tier} entry, not a {tier} one"
+                      if other is not None else
+                      f"--entry {named} is not declared")
+            return _refuse(
+                tier, project_dir, _agent_id(args),
+                f"{reason}; nothing was run",
+                [f"name one of the {tier} entries: "
+                 + ", ".join(e.key for e in entries)])
+        entries = chosen
+    return _run_entries(tier, args, entries, tier)
 
 
 def _read_declared_suites(args, _surface):
@@ -896,6 +1273,9 @@ def _add_declared_tier_args(p):
     _add_python_arg(p)
     _add_gate_cycle_arg(p)
     _axi().add_run_release_arg(p)
+    p.add_argument("--entry",
+                   help="Run only this eda entry of the tier, by its key "
+                        "(`<tier>` or `<tier>/<label>`).")
 
 
 def _add_lifecycle_verbs(sub):
