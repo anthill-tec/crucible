@@ -3,7 +3,7 @@ every stack's declaration as the clients accept it, and the writer's rule.
 
 The schema is a plain JSON descriptor: an integer `version`, a description
 saying it is not a JSON Schema, and a `stacks` map naming bun, rust, arduino,
-maven, python and go. For each stack it states where the declaration lives, how an
+maven, python, go and eda. For each stack it states where the declaration lives, how an
 entry's key is formed, each field (allowed values in one of four forms,
 default, whether it is required, cross-field rules), whether an entry is open,
 the refused fields (entry level, and bun's package level), the stack's own
@@ -32,6 +32,12 @@ BUN_FRAMEWORKS = ["bun-test", "vitest", "playwright", "playwright-bdd"]
 # when that exemption was written). The exemption made it one more: a reader
 # computing the gate rule from the earlier version would refuse that entry.
 VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION = 2
+# The schema's `version` before it named eda, in the vocabulary that states it
+# (a list form, a path that exists with an optional node id, an executable
+# file, a key's tiers and label, an entry-level `frameworkless`). A reader of
+# the earlier version meets forms it does not know, so it is one more.
+VERSION_BEFORE_THE_EDA_VOCABULARY = 3
+EDA_TIERS = ["unit", "module", "integration", "e2e", "bdd"]
 RESERVED = {
     "bun": BUN_FRAMEWORKS,
     "rust": ["nextest"],
@@ -39,6 +45,7 @@ RESERVED = {
     "maven": ["surefire"],
     "arduino": ["arduino-native"],
     "go": ["go-test"],
+    "eda": ["eda-pytest"],
 }
 
 
@@ -49,6 +56,7 @@ class _SchemaCase(unittest.TestCase):
         self.stacks = self.schema.get("stacks") or {}
 
     def entry(self, stack):
+        self.assertIn(stack, sorted(self.stacks), f"the schema names no {stack} stack")
         return self.stacks[stack]["entry"]
 
     def field(self, stack, name):
@@ -60,19 +68,32 @@ class TheSchemaIsAVersionedPlainDescriptorTest(_SchemaCase):
     def test_the_version_is_an_integer_starting_at_one(self):
         version = self.schema.get("version")
         self.assertIs(type(version), int, f"version is {version!r}, not an integer")
-        self.assertGreaterEqual(version, 1)
+        self.assertGreaterEqual(int(str(version)), 1)
 
-    def test_the_version_is_one_more_since_the_gate_exempted_the_marked_entry(self):
-        self.assertEqual(self.schema.get("version"),
-                         VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION + 1)
+    def test_the_version_is_past_the_one_before_the_gate_exempted_the_marked_entry(self):
+        version = self.schema.get("version")
+        self.assertIs(type(version), int, f"version is {version!r}, not an integer")
+        self.assertGreater(int(str(version)), VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION)
+
+    def test_the_version_is_one_more_since_the_schema_learned_the_eda_vocabulary(self):
+        self.assertEqual(self.schema.get("version"), VERSION_BEFORE_THE_EDA_VOCABULARY + 1)
+
+    def test_the_description_states_each_form_of_the_eda_vocabulary(self):
+        description = str(self.schema.get("description", ""))
+        for word in ("list", "min", "items", "exists", "node_id", "executable",
+                     "tiers", "label", "frameworkless"):
+            with self.subTest(word=word):
+                self.assertTrue(f'"{word}"' in description or f"`{word}`" in description,
+                                f"the description does not name the form `{word}`")
 
     def test_the_description_says_it_is_not_a_json_schema(self):
         description = self.schema.get("description")
         self.assertIsInstance(description, str)
-        self.assertIn("not a json schema", description.lower())
+        self.assertIn("not a json schema", str(description).lower())
         self.assertNotIn("$schema", self.schema)
 
-    def test_the_stacks_map_names_exactly_the_six_stacks(self):
+    def test_the_stacks_map_names_exactly_the_seven_stacks(self):
+        self.assertEqual(len(STACKS), 7)
         self.assertEqual(set(self.stacks), set(STACKS))
 
 
@@ -86,9 +107,11 @@ class EachStackStatesWhereItsDeclarationLivesTest(_SchemaCase):
             "maven": {"file": "crucible.toml", "table": "targets.<key>"},
             "python": {"file": "crucible.toml", "table": "python"},
             "go": {"file": "crucible.toml", "table": "go"},
+            "eda": {"file": "crucible.toml", "table": "targets.<key>"},
         }
         for stack, location in expected.items():
             with self.subTest(stack=stack):
+                self.assertIn(stack, sorted(self.stacks))
                 self.assertEqual(self.stacks[stack]["location"], location)
 
     def test_python_declares_no_targets_entry(self):
@@ -104,6 +127,16 @@ class EachStackStatesWhereItsDeclarationLivesTest(_SchemaCase):
         self.assertEqual(self.entry("arduino")["key"]["form"], "dir/target")
         self.assertEqual(self.entry("arduino")["key"]["dir_default"], "tests/native")
         self.assertEqual(self.entry("maven")["key"]["form"], "tier")
+        self.assertIn("eda", sorted(self.stacks))
+        self.assertEqual(self.entry("eda")["key"]["form"], "tier[/label]")
+
+    def test_eda_states_its_description_and_a_key_of_a_tier_and_an_optional_label(self):
+        self.assertIn("eda", sorted(self.stacks))
+        self.assertIsInstance(self.stacks["eda"].get("description"), str)
+        key = self.entry("eda")["key"]
+        self.assertEqual(key["tiers"], EDA_TIERS)
+        self.assertEqual(key["label"], "non-empty")
+        self.assertIsInstance(key.get("description"), str)
 
     def test_bun_states_the_gates_key_rule_for_a_non_bun_test_entry(self):
         gate = self.entry("bun")["key"]["gate"]
@@ -132,6 +165,7 @@ class EachStacksFieldsAreStatedExactlyTest(_SchemaCase):
                 if "fields" in desc:
                     walk(f"{where}.{name}", desc["fields"])
         for stack in STACKS:
+            self.assertIn(stack, sorted(self.stacks), f"the schema names no {stack} stack")
             entry = self.stacks[stack]["entry"]
             if entry is not None:
                 walk(stack, entry["fields"])
@@ -185,8 +219,32 @@ class EachStacksFieldsAreStatedExactlyTest(_SchemaCase):
         self.assertIs(fields["framework"]["required"], True)
         self.assertIs(fields["console"]["required"], True)
 
-    def test_every_targets_entry_is_open(self):
+    def test_eda_fields_are_framework_and_a_list_of_paths_both_required(self):
+        self.assertIn("eda", sorted(self.stacks))
+        fields = self.entry("eda")["fields"]
+        self.assertEqual(set(fields), {"framework", "paths"})
+        self.assertEqual(fields["framework"]["values"], ["eda-pytest"])
+        self.assertIsNone(fields["framework"]["default"])
+        self.assertIs(fields["framework"]["required"], True)
+        self.assertEqual(fields["paths"]["values"],
+                         {"list": {"min": 1, "items": {"path": {"exists": True,
+                                                                  "node_id": "::"}}}})
+        self.assertIsNone(fields["paths"]["default"])
+        self.assertIs(fields["paths"]["required"], True)
+        self.assertIsInstance(fields["paths"].get("description"), str)
+
+    def test_eda_skips_a_frameworkless_entry_and_refuses_no_field(self):
+        self.assertIn("eda", sorted(self.stacks))
+        self.assertEqual(self.entry("eda")["frameworkless"], "skipped")
+        self.assertEqual(self.entry("eda")["refused"], [])
+
+    def test_no_older_stack_states_frameworkless(self):
         for stack in ("bun", "rust", "arduino", "maven"):
+            with self.subTest(stack=stack):
+                self.assertNotIn("frameworkless", self.entry(stack))
+
+    def test_every_targets_entry_is_open(self):
+        for stack in ("bun", "rust", "arduino", "maven", "eda"):
             with self.subTest(stack=stack):
                 self.assertIs(self.entry(stack)["open"], True)
 
@@ -264,6 +322,20 @@ class EachStackTableIsStatedTest(_SchemaCase):
         self.assertIs(module_dir["required"], False)
         self.assertIsNone(module_dir["default"])
 
+    def test_eda_python_is_an_executable_file_a_flag_then_a_variable_override(self):
+        self.assertIn("eda", sorted(self.stacks))
+        table = self.stacks["eda"]["stack_table"]
+        self.assertEqual((table["file"], table["table"]), ("crucible.toml", "eda"))
+        self.assertEqual(set(table["fields"]), {"python"})
+        python = table["fields"]["python"]
+        self.assertEqual(python["values"], {"path": {"is": "executable"}})
+        self.assertIsNone(python["default"])
+        self.assertIs(python["required"], False)
+        self.assertEqual(python["overridden_by"], "--python, then $EDA_CRUCIBLE_PYTHON")
+        self.assertIsInstance(python.get("description"), str)
+        self.assertEqual(table["shape"], {"table_not_a_table": "refused",
+                                          "file_does_not_parse": "refused"})
+
     def test_rust_arduino_and_maven_have_no_stack_table(self):
         for stack in ("rust", "arduino", "maven"):
             with self.subTest(stack=stack):
@@ -276,6 +348,15 @@ class TheShapeAndParseRulesAreStatedTest(_SchemaCase):
         for stack in ("bun", "rust", "arduino", "maven"):
             with self.subTest(stack=stack):
                 self.assertEqual(self.entry(stack)["shape"]["targets_not_a_table"], "undeclared")
+        with self.subTest(stack="eda"):
+            self.assertIn("eda", sorted(self.stacks))
+            self.assertEqual(self.entry("eda")["shape"]["targets_not_a_table"], "undeclared")
+
+    def test_eda_skips_an_entry_that_is_not_a_table_and_refuses_an_unparseable_file(self):
+        self.assertIn("eda", sorted(self.stacks))
+        self.assertEqual(self.entry("eda")["shape"], {"targets_not_a_table": "undeclared",
+                                                      "entry_not_a_table": "skipped",
+                                                      "file_does_not_parse": "refused"})
 
     def test_an_entry_that_is_not_a_table_is_refused(self):
         for stack in ("bun", "rust", "arduino", "maven"):
@@ -302,20 +383,26 @@ class TheReservedFrameworksAndTheSkipRuleAreStatedTest(_SchemaCase):
             with self.subTest(owner=owner):
                 self.assertEqual(sorted(reserved[owner]), sorted(frameworks))
 
+    def test_eda_reserves_eda_pytest(self):
+        self.assertEqual(self.schema["reserved_frameworks"].get("eda"), ["eda-pytest"])
+
     def test_each_targets_stacks_framework_values_are_its_reserved_frameworks(self):
         reserved = self.schema["reserved_frameworks"]
-        for stack in ("bun", "rust", "arduino", "maven"):
+        for stack in ("bun", "rust", "arduino", "maven", "eda"):
             with self.subTest(stack=stack):
+                self.assertIn(stack, sorted(self.stacks))
                 self.assertEqual(sorted(self.field(stack, "framework")["values"]),
                                  sorted(reserved[stack]))
 
     def test_the_targets_readers_skip_and_bun_refuses_another_stacks_framework(self):
         skip = self.schema["skip_rule"]
-        self.assertEqual(sorted(skip["readers"]), ["arduino", "maven", "rust"])
+        self.assertEqual(sorted(skip["readers"]), ["arduino", "eda", "maven", "rust"])
         self.assertEqual(skip["decided_on"], "framework")
         self.assertIn("namespace", skip["description"].lower())
-        for stack in ("rust", "arduino", "maven"):
+        self.assertIn("eda", skip["description"])
+        for stack in ("rust", "arduino", "maven", "eda"):
             with self.subTest(stack=stack):
+                self.assertIn(stack, sorted(self.stacks))
                 self.assertEqual(self.entry(stack)["other_stacks"], "skipped")
         self.assertEqual(self.entry("bun")["other_stacks"], "refused")
 
