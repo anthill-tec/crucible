@@ -100,7 +100,10 @@ def _client_env(outer_home: Path, **extra: str) -> dict[str, str]:
         PYTHONDONTWRITEBYTECODE="1",
         **extra,
     )
+    # A suite run inside CI's own hermetic wrapper inherits its DOCKER_HOST;
+    # the outer side of every run here must not, or it reads as inside.
     for key in (
+        "DOCKER_HOST",
         "CRUCIBLE_STREAM",
         "CRUCIBLE_CURRENT_TEST",
         "CRUCIBLE_CURRENT_TEST_FILE",
