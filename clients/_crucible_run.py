@@ -20,6 +20,7 @@ It imports only the standard library.
 """
 
 import contextlib
+import glob
 import json
 import os
 import re
@@ -2118,3 +2119,155 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     # A no-report run is a failure envelope whichever close filed it.
     emit_ingest(resp, help_steps, warnings, False if no_test_end else None)
     return exit_code
+
+
+# ── the pytest path: its command, its output, its reports ───────────────────
+
+#: The file name every JUnit report a run ingests matches.
+JUNIT_REPORT_GLOB = "TEST-*.xml"
+
+#: The one JUnit report pytest is told to write into the reports dir.
+PYTEST_JUNIT_FILE = "TEST-pytest.xml"
+
+
+def pytest_command(python, reports_dir, selection, *, pattern=None):
+    """The pytest invocation: `python` running pytest verbosely, writing one
+    JUnit report into `reports_dir` in the xunit1 family (the one that stamps
+    `file=` on each test case) with its suite name pinned to `pytest`, then
+    `-o python_files=<pattern>` when a pattern is given, then every item of
+    `selection` (node ids, or a start dir). An empty selection and no pattern
+    leave discovery to the project's own pytest configuration."""
+    argv = [python, "-m", "pytest", "-v",
+            "-o", "junit_family=xunit1", "-o", "junit_suite_name=pytest",
+            f"--junitxml={os.path.join(reports_dir, PYTEST_JUNIT_FILE)}"]
+    if pattern:
+        argv += ["-o", f"python_files={pattern}"]
+    return argv + list(selection)
+
+
+# pytest's `-v` lines: the line ending collection (`collected N items`, maybe
+# `/ D deselected / S selected`, maybe after `collecting ... `), and one verdict
+# line per finished test (`<nodeid> PASSED [ 33%]`). A subtest's `SUB...`
+# verdict and the short summary's `FAILED <nodeid> - ...` are no finished test.
+_PYTEST_COLLECTED_LINE = re.compile(
+    r"^(?:collecting \.\.\. )?collected (\d+) items?\b(.*)$")
+_PYTEST_SELECTED = re.compile(r"/ (\d+) selected\b")
+_PYTEST_VERDICT_LINE = re.compile(
+    r"^\S+::\S+.*\s(?:PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)(?:\s|$)")
+
+
+class PytestProgress:
+    """pytest's half of the shared narration: reads the selected total from
+    the line ending collection and counts one completion per verdict line."""
+
+    def __init__(self):
+        self.selected = 0
+
+    def recognise(self, line):
+        """True when `line` is one finished test; records the selected total."""
+        text = line.rstrip("\r\n")
+        collected = _PYTEST_COLLECTED_LINE.match(text)
+        if collected:
+            stated = _PYTEST_SELECTED.search(collected.group(2))
+            self.selected = int(stated.group(1) if stated else collected.group(1))
+            return False
+        return _PYTEST_VERDICT_LINE.match(text) is not None
+
+
+# pytest's report of a passing subtest: a `SUBPASSED` verdict line, or the
+# closing summary's `N subtests passed`.
+_PYTEST_SUBTESTS_PASSED = re.compile(r"\sSUBPASSED\b|\b[1-9]\d* subtests? passed\b")
+
+#: The detail of the warning that passing subtests went uncounted.
+PYTEST_SUBTESTS_UNCOUNTED_DETAIL = (
+    "pytest writes no test case for a passing subtest in its JUnit report, "
+    "so passing subtests were not counted")
+
+
+def pytest_reports_passing_subtest(line):
+    """Whether `line` is pytest reporting a passing subtest: a `SUBPASSED`
+    verdict line, or a summary of one or more passed subtests."""
+    return _PYTEST_SUBTESTS_PASSED.search(line) is not None
+
+
+#: pytest's exit codes for a run it could not carry out as a runner: an
+#: internal error (3) and a usage error (4: a node id it cannot find, a
+#: conftest it cannot load). Whatever JUnit it wrote then is no test result.
+PYTEST_RUNNER_FAILURES = (3, 4)
+
+# pytest's own report of why it failed as a runner (under `-v` it may follow
+# the `collecting ... ` it printed on the same line).
+_PYTEST_ERROR_LINE = re.compile(
+    r"^(?:collecting \.\.\. )?"
+    r"(?P<error>(?:ERROR:|INTERNALERROR|ImportError while loading conftest).*)")
+
+
+def pytest_failed_as_runner(returncode):
+    """Whether a pytest exit code says pytest failed as a runner, not with a
+    result."""
+    return returncode in PYTEST_RUNNER_FAILURES
+
+
+def pytest_error_line(output):
+    """pytest's own error line in its captured output (the last one), or
+    None when it printed none."""
+    found = [m.group("error").strip()
+             for m in map(_PYTEST_ERROR_LINE.match, (output or "").splitlines())
+             if m]
+    return found[-1] if found else None
+
+
+#: How long the pytest import probe may take before it is given up on.
+PYTEST_PROBE_TIMEOUT_S = 60
+
+
+def pytest_importable(python, cwd):
+    """Whether `python` can import pytest, probed in `cwd`: True when it
+    imports, False when it cannot or the interpreter cannot be started, and
+    None when the probe does not answer within `PYTEST_PROBE_TIMEOUT_S`."""
+    try:
+        probe = subprocess.run([python, "-c", "import pytest"],
+                               cwd=cwd, capture_output=True, text=True,
+                               check=False, timeout=PYTEST_PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
+    except OSError:
+        return False
+    return probe.returncode == 0
+
+
+def junit_report_paths(reports_dir):
+    """Every JUnit report in `reports_dir`, in sorted path order; none for a
+    missing directory."""
+    return sorted(glob.glob(os.path.join(reports_dir, JUNIT_REPORT_GLOB)))
+
+
+def _is_junit_report(entry):
+    """Whether the directory entry `entry` is named as a JUnit report."""
+    return entry.startswith("TEST-") and entry.endswith(".xml")
+
+
+def produced_junit(reports_dir):
+    """Whether `reports_dir` exists and holds at least one JUnit report."""
+    return os.path.isdir(reports_dir) and any(
+        _is_junit_report(e) for e in os.listdir(reports_dir))
+
+
+def wipe_junit_reports(reports_dir):
+    """Remove the stale JUnit reports in `reports_dir` a run is about to
+    rewrite, and nothing else; a missing directory is left alone."""
+    if os.path.isdir(reports_dir):
+        for entry in os.listdir(reports_dir):
+            if _is_junit_report(entry):
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(reports_dir, entry))
+
+
+#: The fallback text when pytest wrote no JUnit report and printed nothing.
+PYTEST_NO_REPORT_TEXT = ("pytest produced no JUnit XML "
+                         "(collection/usage failure, no output captured)")
+
+
+def pytest_no_report_subject(verb):
+    """What a no-report detail says produced no report under pytest."""
+    return f"{verb} under pytest"
