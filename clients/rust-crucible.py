@@ -672,7 +672,7 @@ _TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
 #: with no framework is still the rust entry.
 _OTHER_STACKS_FRAMEWORKS = ("arduino-native", "surefire", "unittest", "pytest",
                             "bun-test", "vitest", "playwright", "playwright-bdd",
-                            "go-test")
+                            "go-test", "eda-pytest")
 
 
 def _nextest_refusal(args, verb, project_dir, profile, coverage=False, gate=False):
