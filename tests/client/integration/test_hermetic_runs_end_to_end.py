@@ -31,8 +31,12 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 
 from tests.client import CLIENT_SOURCE_DIR, client_script
+from tests.client.eda_project_harness import PROJECT_DIR_VAR as EDA_PROJECT_DIR_VAR
+from tests.client.eda_project_harness import PYTHON_VAR as EDA_PYTHON_VAR
+from tests.client.eda_project_harness import EdaProject, RecordingInterpreter
 from tests.client.live_run_harness import load_toon, scrubbed_env
 from tests.client.real_board import RealBoard
 
@@ -950,6 +954,174 @@ class PreMergeGateHermeticUnitCheckTest(unittest.TestCase):
             [],
             "aborted gate must file no regression test run on the board",
         )
+
+
+# The eda project's leaking gate reaches the project's OWN board port, which the
+# tripwire guards inside the namespace; the project's `[hermetic]` table names
+# that port as its default board port too, so no eda run here touches 3849.
+_EDA_LEAK_CHECK = '''"""A gate that reaches the project's own board from inside its run."""
+
+import os
+import urllib.error
+import urllib.request
+
+BOARD_PORT = {port}
+
+
+def test_the_board_is_reached_from_inside_the_run():
+    assert os.environ.get("DOCKER_HOST") == "unix:///nonexistent", (
+        "refusing to reach the board outside hermetic isolation")
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{{BOARD_PORT}}/api/v2/health", timeout=5)
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 503
+'''
+
+_EDA_CLEAN_CHECK = '''"""A gate that checks its own run is isolated."""
+
+import os
+from pathlib import Path
+
+OUTER_HOME = {outer_home!r}
+
+
+def test_the_run_is_isolated():
+    home = Path(os.environ["HOME"])
+    assert os.path.realpath(home) != os.path.realpath(OUTER_HOME)
+    assert not (home / "operator-sentinel.txt").exists()
+    assert os.environ.get("DOCKER_HOST") == "unix:///nonexistent"
+    for name in ("XDG_CONFIG_HOME", "CRUCIBLE_PROJECT_KEY", "SANDESH_ADDRESS"):
+        assert name not in os.environ, f"{{name}} leaked into the run"
+'''
+
+# Every eda tier is declared over the leaking gate, so each tier verb, `test`,
+# `regression` (one run over the one path) and the gate (one suite per gated
+# entry, `e2e/leak` excluded) runs it.
+_EDA_LEAK_ENTRIES = "\n".join(
+    f'[targets."{key}"]\nframework = "eda-pytest"\npaths = ["tests/leak"]\n'
+    for key in ("unit", "module/leak", "integration/leak", "e2e/leak", "bdd/leak"))
+_EDA_GATED_LEAK_SUITES = 4
+
+
+class EdaHermeticEndToEndTest(unittest.TestCase):
+    """AC1 and AC2 for eda -- real `eda-crucible.py <verb> --hermetic` on a
+    scratch copy of the eda fixture project, against the real scratch
+    `RealBoard`: a leak on every run verb files a red run carrying the leak
+    and a failing `tripwire` suite, and a clean run files green."""
+
+    def setUp(self):
+        if _BOARD is None:
+            self.fail("RealBoard was not booted in setUpModule")
+        self.board = _BOARD
+        self.board_port = urlparse(self.board.base).port
+        self.scratch = Path(tempfile.mkdtemp(prefix="eda-hermetic-e2e-"))
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.outer_home = self.scratch / "outer-home"
+        self.outer_home.mkdir()
+        (self.outer_home / "operator-sentinel.txt").write_text("do-not-see", encoding="utf-8")
+        self.python = RecordingInterpreter(self.scratch / "bin" / "python")
+
+    def _eda_project(self, entries, rel, text):
+        project = EdaProject(self, board=self.board, project_key=self.board.key)
+        project.declare_only_the_board()
+        project.declare(entries)
+        project.declare(f"[hermetic]\ndefault_board_port = {self.board_port}\n")
+        project.write(rel, text)
+        return project
+
+    def _eda_client_env(self, **extra):
+        env = _client_env(self.outer_home, **extra)
+        for key in (EDA_PYTHON_VAR, EDA_PROJECT_DIR_VAR, "PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
+            env.pop(key, None)
+        return env
+
+    def _drive(self, project, verb, *argv, agent_id, **extra):
+        _register_agent(self.board, agent_id)
+        return project.drive(verb, *argv, "--hermetic", agent=agent_id,
+                             python=self.python.path, env=self._eda_client_env(**extra),
+                             timeout=RUN_TIMEOUT)
+
+    def _assert_leak_filed(self, result, agent_id, runs):
+        where = f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        self.assertNotEqual(result.returncode, 0, f"a leaking hermetic run exits non-zero; {where}")
+        env = _parse_envelope(result.stdout, result.stderr)
+        self.assertIs(env.get("ok"), False, f"envelope={env!r}")
+        env_leaks = env.get("leaks")
+        self.assertIsInstance(env_leaks, list, f"envelope must carry leaks[]: {env!r}")
+        self.assertTrue(
+            any(isinstance(item, dict) and item.get("port") == self.board_port
+                for item in env_leaks or []),
+            f"envelope leaks must name the board port {self.board_port}: {env_leaks!r}")
+        events = self.board.test_events(agent_id)
+        self.assertEqual(len(events), runs, f"expected {runs} filed test event(s), got {events!r}")
+        for event in events:
+            stored = self.board.event(event["id"])
+            self.assertGreaterEqual((stored.get("summary") or {}).get("failed", 0), 1,
+                                    f"stored run must be red: {stored!r}")
+            matched = [item for item in stored.get("leaks") or []
+                       if item.get("port") == self.board_port]
+            self.assertGreaterEqual(len(matched), 1,
+                                    f"expected a port={self.board_port} leak: {stored!r}")
+            self.assertTrue(str(matched[0].get("cmd", "")).strip() if matched else "",
+                            f"the leak records a non-empty cmd: {matched!r}")
+            tripwire_suite = _find_suite(stored.get("tree") or [], "tripwire")
+            self.assertIsNotNone(tripwire_suite, f"missing tripwire suite: {stored.get('tree')!r}")
+            self.assertEqual((tripwire_suite or {}).get("status"), "fail")
+
+    def _leaking_project(self):
+        return self._eda_project(_EDA_LEAK_ENTRIES, "tests/leak/check_leak.py",
+                                 _EDA_LEAK_CHECK.format(port=self.board_port))
+
+    def test_eda_tier_verbs_hermetic_detect_the_leak_and_file_red_runs(self):
+        project = self._leaking_project()
+        for verb in ("unit", "module", "integration", "e2e", "bdd"):
+            with self.subTest(verb=verb):
+                agent_id = f"eda-hermetic-leak-{verb}-agent"
+                result = self._drive(project, verb, agent_id=agent_id)
+                self._assert_leak_filed(result, agent_id, runs=1)
+
+    def test_eda_test_hermetic_detects_the_leak_and_files_a_red_run(self):
+        project = self._leaking_project()
+        agent_id = "eda-hermetic-leak-test-agent"
+        result = self._drive(project, "test", "--tests", "tests/leak", agent_id=agent_id)
+        self._assert_leak_filed(result, agent_id, runs=1)
+
+    def test_eda_regression_hermetic_detects_the_leak_and_files_a_red_run(self):
+        project = self._leaking_project()
+        agent_id = "eda-hermetic-leak-regression-agent"
+        result = self._drive(project, "regression", agent_id=agent_id)
+        self._assert_leak_filed(result, agent_id, runs=1)
+
+    def test_eda_pre_merge_gate_hermetic_runs_every_suite_in_the_namespace(self):
+        project = self._leaking_project()
+        agent_id = "eda-hermetic-leak-gate-agent"
+        result = self._drive(project, "pre-merge-gate", agent_id=agent_id)
+        self._assert_leak_filed(result, agent_id, runs=_EDA_GATED_LEAK_SUITES)
+
+    def test_eda_unit_hermetic_clean_run_files_green_and_enforces_isolation(self):
+        project = self._eda_project(
+            '[targets."unit"]\nframework = "eda-pytest"\npaths = ["tests/clean"]\n',
+            "tests/clean/check_clean.py",
+            _EDA_CLEAN_CHECK.format(outer_home=str(self.outer_home)))
+        agent_id = "eda-hermetic-clean-agent"
+        result = self._drive(project, "unit", agent_id=agent_id,
+                             XDG_CONFIG_HOME=str(self.outer_home / "xdg-cfg"),
+                             CRUCIBLE_PROJECT_KEY="canary-outer-eda",
+                             SANDESH_ADDRESS="canary-sandesh")
+        self.assertEqual(result.returncode, 0,
+                         f"a clean hermetic run exits 0; stdout={result.stdout!r} "
+                         f"stderr={result.stderr!r}")
+        env = _parse_envelope(result.stdout, result.stderr)
+        self.assertIs(env.get("ok"), True, f"envelope={env!r}")
+        self.assertIsNone(env.get("leaks"), f"a clean run emits no leaks: {env!r}")
+        events = self.board.test_events(agent_id)
+        self.assertEqual(len(events), 1, f"expected 1 filed test event, got {events!r}")
+        stored = self.board.event(events[0]["id"])
+        summary = stored.get("summary") or {}
+        self.assertEqual((summary.get("passed"), summary.get("failed")), (1, 0),
+                         f"a clean run is green: {stored!r}")
+        self.assertIsNone(stored.get("leaks"), f"a clean run stores no leaks: {stored!r}")
+        self.assertIsNone(_find_suite(stored.get("tree") or [], "tripwire"))
 
 
 if __name__ == "__main__":

@@ -596,10 +596,11 @@ describe("CR-CRU-119 — the seq finding names the cause it actually found", () 
         .sort();
       // The count itself, asserted: a seventh stack client (or a deleted one)
       // must fail here rather than quietly narrowing the parity claim below.
-      expect(clients).toHaveLength(6);
+      expect(clients).toHaveLength(7);
       expect(clients).toEqual([
         "arduino-crucible.py",
         "bun-crucible.py",
+        "eda-crucible.py",
         "go-crucible.py",
         "mvn-crucible.py",
         "python-crucible.py",

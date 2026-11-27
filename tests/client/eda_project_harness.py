@@ -319,3 +319,65 @@ def said(axi):
 def diagnostics(result):
     return (f"exit={result.returncode} stdout={result.stdout[-2000:]!r} "
             f"stderr={result.stderr[-2000:]!r}")
+
+
+class BoardDrive:
+    """One eda client run on a real board behind a recording proxy: its
+    result and envelope, the requests it sent the board (`records`, the
+    proxy's), the interpreter calls it made (`calls`) and the environments
+    its pytest children recorded (`child_envs`)."""
+
+    def __init__(self, result, records, calls, child_envs):
+        self.result = result
+        self.axi = envelope(result.stdout)
+        self.records = records
+        self.calls = calls
+        self.child_envs = child_envs
+
+    def posted(self, path):
+        """The bodies of every POST to `path`, in wire order."""
+        return [r.get("body") for r in self.records
+                if r.get("method") == "POST" and r.get("path") == path]
+
+    def run_route_posts(self):
+        """Every POST that opens, streams or files a run."""
+        return [r for r in self.records
+                if r.get("method") == "POST"
+                and str(r.get("path")).startswith("/api/v2/runs")]
+
+    def envelope_lines(self):
+        return [line for line in self.result.stdout.splitlines()
+                if line.startswith("axi:")]
+
+    def warnings_coded(self, code):
+        return [w for w in (self.axi or {}).get("warnings") or []
+                if isinstance(w, dict) and w.get("code") == code]
+
+    def diag(self):
+        return diagnostics(self.result)
+
+
+def pytest_selections(calls, project_dir):
+    """What each pytest call of `calls` (a recording interpreter's) was asked
+    to run, as paths (or node ids) relative to `project_dir`, in call order."""
+    selections = []
+    for call in calls:
+        argv = call["argv"]
+        if not is_pytest_argv(argv):
+            continue
+        picked, skip_next = [], False
+        for arg in argv[argv.index("pytest") + 1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg in ("-o", "-p", "-c", "--rootdir"):
+                skip_next = True
+                continue
+            if arg.startswith("-"):
+                continue
+            path, sep, node = arg.partition("::")
+            rel = os.path.relpath(real_dir(os.path.join(call["cwd"], path)),
+                                  real_dir(project_dir))
+            picked.append(rel + sep + node)
+        selections.append(picked)
+    return selections
