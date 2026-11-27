@@ -73,6 +73,7 @@ CLIENT_SCRIPTS = {
     "mvn": "mvn-crucible.py",
     "arduino": "arduino-crucible.py",
     "go": "go-crucible.py",
+    "eda": "eda-crucible.py",
 }
 
 VERB = "project-create"
@@ -116,7 +117,8 @@ _STRIPPED_ENV = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
                  "CRUCIBLE_URL", "CRUCIBLE_BASE", "AGENT_ID",
                  "PY_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
                  "RUST_CRUCIBLE_PROJECT_DIR", "MVN_CRUCIBLE_PROJECT_DIR",
-                 "ARDUINO_CRUCIBLE_PROJECT_DIR", "GO_CRUCIBLE_PROJECT_DIR")
+                 "ARDUINO_CRUCIBLE_PROJECT_DIR", "GO_CRUCIBLE_PROJECT_DIR",
+                 "EDA_CRUCIBLE_PROJECT_DIR")
 
 
 def is_uuid(value):

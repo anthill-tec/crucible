@@ -37,7 +37,7 @@ from tests.client import TEST_INSTALL_CLIENTS
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 CLIENT_FILES = {client: CLIENTS_DIR / f"{client}-crucible.py"
-                for client in ("python", "bun", "rust", "mvn", "arduino", "go")}
+                for client in ("python", "bun", "rust", "mvn", "arduino", "go", "eda")}
 
 ENV_KEYS = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
             "WORKFLOW_CYCLE", "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY")

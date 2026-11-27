@@ -661,6 +661,9 @@ class GoDeclaredUnitRunThatWaitsTest(_WallVsCpuProbe, _MODALITY._GoModalityCase)
                          f"warnings={self.envelope(drive).get('warnings')!r}")
 
 
+# eda is excluded: its waiting `unit` run is proved to carry the warning, and
+# its waiting `integration` run and a CPU-bound `unit` run to carry none, by
+# `test_an_eda_run_keeps_the_fleet_invariants`.
 _PROBED_CLIENTS = {
     "mvn": MvnUnitRunThatWaitsTest,
     "rust": RustUnitRunThatWaitsTest,

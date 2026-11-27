@@ -78,7 +78,7 @@ CORE_MODULE = CLIENTS_DIR / "_crucible_axi.py"
 
 VERB = "release-notes"
 
-#: The six clients that reach the verb, keyed as the fleet keys them.
+#: The seven clients that reach the verb, keyed as the fleet keys them.
 CLIENT_FILES = {
     "bun": "bun-crucible.py",
     "python": "python-crucible.py",
@@ -86,6 +86,7 @@ CLIENT_FILES = {
     "mvn": "mvn-crucible.py",
     "arduino": "arduino-crucible.py",
     "go": "go-crucible.py",
+    "eda": "eda-crucible.py",
 }
 
 ORCHESTRATOR = "release-notes-fixture-orchestrator"

@@ -64,6 +64,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     build_argv,
     declare_and_require_board,
     enumerate_verbs,
+    seed_eda_run,
 )
 from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _build_recording_bin_dir,
@@ -104,8 +105,9 @@ GATED = "gated"
 FILING = "filing"
 #: The kinds each client's census must observe, where a client differs from
 #: the default of a filing verb and a gated one. Every client, the go client
-#: included (its `check` files a compile run), observes both today.
-CLIENT_KINDS = {}
+#: included (its `check` files a compile run), observes both, but eda: no eda
+#: verb opens a gated identity -- each run's cycle rides on the run it files.
+CLIENT_KINDS = {"eda": [FILING]}
 
 
 def _shared():
@@ -184,7 +186,9 @@ def _seed(client_key, verb, project_dir, red):
             (d / f"{verb}_probe_test.go").write_text(
                 f'//go:build {verb}\n\npackage probe\n\nimport "testing"\n\n'
                 f'func Test_{verb}_tier_probe(t *testing.T) {{}}\n')
-    if verb == "auto-ingest" and client_key in ("python", "bun", "arduino"):
+    if client_key == "eda":
+        extra += seed_eda_run(d, verb)
+    if verb == "auto-ingest" and client_key in ("python", "bun", "arduino", "eda"):
         reports = d / SEEDED_REPORTS
         reports.mkdir(exist_ok=True)
         name = "junit.xml" if client_key == "bun" else "TEST-Probe.xml"

@@ -77,6 +77,10 @@ ADDED_HELP_VERBS = (
     # go's gate verbs, which run every module (and, where a module declares
     # a tier by build tag, the gate runs each tier as a suite of its own).
     + [("go-crucible.py", v) for v in ("regression", "pre-merge-gate")]
+    # eda's tier verbs and its gate, which runs each declared eda entry as a
+    # suite of its own.
+    + [("eda-crucible.py", v) for v in
+       ("unit", "module", "integration", "e2e", "bdd", "regression", "pre-merge-gate")]
 )
 
 

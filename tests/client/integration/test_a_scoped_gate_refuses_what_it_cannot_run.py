@@ -91,7 +91,7 @@ def _client_argv(client_key, project_dir, bin_dir):
         return ["--package-dir", str(project_dir), "--reports", "reports"]
     if client_key == "rust":
         return ["--min-free-g", "1"]
-    if client_key == "python":
+    if client_key in ("python", "eda"):
         return ["--python", str(Path(bin_dir) / _PYTHON_WRAPPER)]
     return []
 
@@ -369,7 +369,14 @@ class GoRefusesAScopedGateItCannotRunTest(_AScopedGateRefusal):
 
     CLIENT = "go"
 
-# The abstract refusal is no test of its own: only its six clients run.
+class EdaRefusesAScopedGateItCannotRunTest(_AScopedGateRefusal):
+    """An eda project that declares a `unit`, an `integration` and an `e2e`
+    entry, its interpreter a recorded one, so a refusal that ran it (its
+    pytest probe included) is seen."""
+
+    CLIENT = "eda"
+
+# The abstract refusal is no test of its own: only its seven clients run.
 del _AScopedGateRefusal
 
 if __name__ == "__main__":

@@ -62,7 +62,10 @@ from tests.client import TEST_INSTALL_CLIENTS
 
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
-#: Every client that has the `run` verb.
+#: Every client that has the `run` verb and takes a coverage run. eda is
+#: excluded: it takes no coverage, so it never stores a run's coverage files
+#: (its `run` verb's lint record is read back by
+#: `test_runs_and_run_word_a_lint_record_as_lint`).
 RUN_VERB_CLIENTS = {stack: CLIENTS_DIR / f"{stack}-crucible.py"
                     for stack in ("python", "bun", "rust", "mvn", "arduino", "go")}
 

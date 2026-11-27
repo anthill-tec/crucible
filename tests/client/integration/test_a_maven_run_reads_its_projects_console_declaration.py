@@ -111,6 +111,8 @@ OTHER_STACKS = (
     'framework = "bun-test"\njunit = "flag"\nconsole = "bun-console"\ncoverage = "lcov"\n',
     'framework = "unittest"\nstream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }\n',
     'framework = "pytest"\nstream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }\n',
+    'framework = "go-test"\nstream = { codec = "go-test", path = "stdout" }\n',
+    'framework = "eda-pytest"\npaths = ["tests"]\ncoverage = "lcov"\n',
 )
 
 _SCRUBBED = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_COVERAGE_PROFILE",

@@ -14,7 +14,10 @@ from tests.client.a_gate_milestone_carries_each_suite_result_helpers import (
     EXCLUDED_SUITE,
     PYTHON_SUITE,
 )
-from tests.client.client_fleet_envelope_census_helpers import CLIENT_FILES
+from tests.client.client_fleet_envelope_census_helpers import (
+    CLIENT_FILES,
+    declare_eda_entries,
+)
 from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _seed,
 )
@@ -37,7 +40,9 @@ TARGETS = {
     "python": {"gated": ("tests/unit", "tests/integration"), "excluded": None,
                "undeclared": "tests/nowhere"},
     "go": {"gated": ("untagged", "integration"), "excluded": "e2e",
-           "undeclared": "module"},
+            "undeclared": "module"},
+    "eda": {"gated": ("unit", "integration"), "excluded": "e2e",
+             "undeclared": "module"},
 }
 
 #: The tier files a go module declares `integration` and `e2e` with, beside
@@ -90,3 +95,7 @@ def _declare(client_key, project_dir):
         # and each declared tier, `e2e` declared and excluded.
         for name, text in _GO_TIER_FILES.items():
             (d / name).write_text(text)
+    elif client_key == "eda":
+        # eda declares an entry per suite: its gate runs each, `e2e` listed
+        # and excluded.
+        declare_eda_entries(d, ("unit", "integration", "e2e"))

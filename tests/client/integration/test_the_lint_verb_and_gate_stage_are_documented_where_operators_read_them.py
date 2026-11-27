@@ -55,6 +55,12 @@ _SAME_SENTENCE = r"(?:[^.]|\.(?=\S))*?"
 _LINT = r"\blint\b"
 _TESTS = r"(?:\btests?\b|regression)"
 
+#: The clients whose help this file reads for a lint verb and a lint stage:
+#: the whole fleet but eda, which is excluded because it has no `lint` verb
+#: and its `pre-merge-gate` runs no lint stage yet, so its help has neither to
+#: describe. Its top-level help is still driven, as every client's is.
+LINT_CLIENTS = {key: path for key, path in CLIENT_FILES.items() if key != "eda"}
+
 #: Each client's gate order, as the stages it names in turn.
 STAGE_ORDER = {
     "python": (r"\bcheck\b", _LINT, _TESTS),
@@ -106,7 +112,7 @@ def _gate_helps():
     fake_bin_dir = _build_fake_bin_dir()
     helps = {}
     try:
-        for client_key, script_path in CLIENT_FILES.items():
+        for client_key, script_path in LINT_CLIENTS.items():
             project_dir = _make_project_dir(client_key)
             try:
                 helps[client_key] = drive_verb(
@@ -131,7 +137,8 @@ class EveryClientsHelpNamesTheLintVerbTest(unittest.TestCase):
     def test_every_clients_top_level_help_lists_the_lint_verb_naming_its_table(self):
         self.assertEqual(sorted(self.helps), sorted(CLIENT_FILES))
         offenders = {}
-        for client_key, completed in self.helps.items():
+        for client_key in LINT_CLIENTS:
+            completed = self.helps[client_key]
             self.assertEqual(completed.returncode, 0, f"{client_key}: {completed.stderr!r}")
             entry = re.search(r"(?m)^\s{1,6}lint\s{2,}(.*)$", completed.stdout)
             if entry is None or "[lint]" not in entry.group(1):
@@ -156,12 +163,12 @@ class EveryGatesHelpNamesItsLintStageTest(unittest.TestCase):
         return completed.stdout
 
     def test_every_gates_help_names_skip_lint(self):
-        missing = [c for c in CLIENT_FILES if "--skip-lint" not in self.gate_help(c)]
+        missing = [c for c in LINT_CLIENTS if "--skip-lint" not in self.gate_help(c)]
         self.assertEqual(missing, [], "every gate's help names --skip-lint")
 
     def test_every_gates_help_states_its_own_stage_order_with_lint(self):
         offenders = {}
-        for client_key in CLIENT_FILES:
+        for client_key in LINT_CLIENTS:
             text = normalise(after_usage(self.gate_help(client_key)))
             if not stage_order_pattern(client_key).search(text):
                 offenders[client_key] = STAGE_ORDER[client_key]
@@ -173,7 +180,7 @@ class EveryGatesHelpNamesItsLintStageTest(unittest.TestCase):
 
     def test_the_gates_line_in_every_top_level_help_states_the_order_with_lint(self):
         offenders = {}
-        for client_key in CLIENT_FILES:
+        for client_key in LINT_CLIENTS:
             entries = gate_entries(self.top[client_key].stdout)
             wrong = [e for e in entries if not stage_order_pattern(client_key).search(e)]
             if not entries or wrong:

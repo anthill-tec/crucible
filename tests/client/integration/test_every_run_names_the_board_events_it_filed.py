@@ -50,6 +50,7 @@ import uuid
 
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
+    EDA_PROBE_DIR,
     _build_fake_bin_dir,
     _load_toon_module,
     _make_project_dir,
@@ -72,10 +73,16 @@ from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_he
     _SUREFIRE_FAIL_ONE_OF_TWO,
     _SUREFIRE_PASS_ONE,
     FAILING_TEST_MARKER,
+    PASSING_TEST_NAME,
     _fail_bin_dir_for,
     _failing_tests_sent,
     _write_native_fixture,
 )
+
+#: The eda probe's pytest module, passing, and failing one of its two tests.
+_EDA_TEST_PASS = f"def test_{PASSING_TEST_NAME}():\n    assert 1 == 1\n"
+_EDA_TEST_FAIL = (_EDA_TEST_PASS
+                  + f"\n\ndef test_{FAILING_TEST_MARKER}():\n    assert 2 == 3\n")
 
 TOON = _load_toon_module()
 OUTCOMES = ("pass", "fail")
@@ -211,6 +218,11 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                 _PY_TEST_PASS if outcome == "pass" else _PY_TEST_FAIL)
         if client_key == "arduino" and outcome == "fail":
             _write_native_fixture(project_dir, "fail")
+        if client_key == "eda":
+            # The census project's probe, passing or failing as this drive's
+            # outcome: every eda entry runs it.
+            (project_dir / EDA_PROBE_DIR / "test_probe.py").write_text(
+                _EDA_TEST_PASS if outcome == "pass" else _EDA_TEST_FAIL)
         if client_key == "mvn" and verb == "auto-ingest":
             # The refusal suite seeds no maven report; without one maven's
             # auto-ingest falls back to a compile capture.

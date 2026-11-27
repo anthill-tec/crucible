@@ -232,6 +232,12 @@ ALREADY_COMPLIANT_VERBS = (
        ("unit", "integration", "e2e", "module", "bdd", "regression-ingest")]
     + [("arduino-crucible.py", v) for v in
        ("test", "unit", "regression", "pre-merge-gate")]
+    # eda: every verb that runs pytest. eda is excluded from the round trip
+    # below: its run opens no gated identity, so its `--cycle` rides on the
+    # run it files and posts no register/heartbeat carrying it.
+    + [("eda-crucible.py", v) for v in
+       ("test", "regression", "pre-merge-gate", "unit", "module", "integration",
+        "e2e", "bdd")]
 )
 
 # ── shared drive helper ─────────────────────────────────────────────────────

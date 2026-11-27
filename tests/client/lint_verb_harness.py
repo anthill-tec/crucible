@@ -67,7 +67,10 @@ from tests.client import TEST_INSTALL_CLIENTS
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
-#: The six clients, in a fixed order; each client's stack is its key.
+#: The six clients with a `lint` verb, in a fixed order; each client's stack
+#: is its key. eda is excluded: it has no `lint` verb, and its gate runs no
+#: lint stage, so neither the lint verb's contract nor the lint-order one
+#: applies to it yet.
 CLIENTS = ("python", "bun", "rust", "mvn", "arduino", "go")
 
 COMPILE_ROUTE = "/api/v2/runs/compile"

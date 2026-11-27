@@ -1,5 +1,5 @@
 """`release-notes --release <label>` drafts a release's CHANGELOG section from
-the board, in each of the six clients.
+the board, in each of the seven clients.
 
 One fake board (`release_notes_board`'s seeder) holds a SHIPPED release with three completed CRs,
 declared in one order (alpha, bravo, charlie — the order the history row lists
@@ -160,6 +160,10 @@ class ArduinoReleaseNotesDraftTest(_Contract.ReleaseNotesDraft):
 
 class GoReleaseNotesDraftTest(_Contract.ReleaseNotesDraft):
     CLIENT = "go"
+
+
+class EdaReleaseNotesDraftTest(_Contract.ReleaseNotesDraft):
+    CLIENT = "eda"
 
 
 if __name__ == "__main__":

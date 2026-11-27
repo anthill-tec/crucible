@@ -12,6 +12,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _FAKE_TOOLS,
     enumerate_verbs,
+    seed_eda_run,
 )
 
 
@@ -137,7 +138,9 @@ def _seed(client_key, verb, project_dir):
             (d / f"{verb}_probe_test.go").write_text(
                 f'//go:build {verb}\n\npackage probe\n\nimport "testing"\n\n'
                 f'func Test_{verb}_tier_probe(t *testing.T) {{}}\n')
-    if verb == "auto-ingest" and client_key in ("python", "bun", "arduino"):
+    if client_key == "eda":
+        extra += seed_eda_run(d, verb)
+    if verb == "auto-ingest" and client_key in ("python", "bun", "arduino", "eda"):
         reports = d / SEEDED_REPORTS
         reports.mkdir(exist_ok=True)
         name = "junit.xml" if client_key == "bun" else "TEST-Probe.xml"

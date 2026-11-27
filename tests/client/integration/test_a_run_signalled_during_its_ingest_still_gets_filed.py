@@ -59,7 +59,9 @@ from tests.client.live_run_harness import (
     write_fake_python,
 )
 from tests.client.client_fleet_envelope_census_helpers import (
+    EDA_PROBE_DIR,
     fake_go_body,
+    write_eda_project,
     write_go_module,
 )
 
@@ -109,6 +111,12 @@ class _IngestHeldSignalCase(unittest.TestCase):
         fake_go = Path(self.bin_dir, "go")
         fake_go.write_text(fake_go_body("pass"))
         fake_go.chmod(0o755)
+        # eda: a probe of three passing pytest tests its `test` is named, run
+        # by this suite's interpreter (`--python`, since a fresh board
+        # rewrites the project's crucible.toml).
+        write_eda_project(self.project)
+        Path(self.project, EDA_PROBE_DIR, "test_probe.py").write_text("".join(
+            f"def test_case_{index}():\n    assert 1 == 1\n\n\n" for index in range(3)))
 
     def tearDown(self):
         self.board.close()
@@ -156,6 +164,12 @@ class _IngestHeldSignalCase(unittest.TestCase):
                 "--project-dir", self.project, "--reports", "reports",
                 "--agent", AGENT]
 
+    def _eda_test_cmd(self):
+        return [sys.executable, str(CLIENTS / "eda-crucible.py"), "test",
+                "--tests", EDA_PROBE_DIR, "--python", sys.executable,
+                "--project-dir", self.project, "--reports", "reports",
+                "--agent", AGENT]
+
     def _arduino_test_cmd(self):
         return [sys.executable, str(CLIENTS / "arduino-crucible.py"), "test",
                 "--dir", "tests/native", "--project-dir", self.project,
@@ -193,7 +207,8 @@ class _IngestHeldSignalCase(unittest.TestCase):
 
     def _assert_ingest_signal_filed_the_run(self, label, signum, code, stdout,
                                             stderr, ingest_path, inline=None,
-                                            streamed: str | bool = False):
+                                            streamed: str | bool = False,
+                                            identity=True):
         signame = signal.Signals(signum).name
         run_ids = self.board.run_ids_opened()
         self.assertEqual(
@@ -290,13 +305,19 @@ class _IngestHeldSignalCase(unittest.TestCase):
             f"NOT abort it; got {aborts!r}; all posts="
             f"{self.board.posts()!r}; exit={code}; stderr={stderr[-2000:]!r}")
         removals = _removals_for(self.board.posts(), AGENT)
-        self.assertEqual(
-            len(removals), 1,
-            f"{label}: the identity must still be removed (one removal) "
-            f"once the run is filed; got {len(removals)}: {removals!r}")
-        self.assertIs(
-            removals[0].get("silent"), True,
-            f"{label}: removal must be silent=True; got {removals[0]!r}")
+        if identity:
+            self.assertEqual(
+                len(removals), 1,
+                f"{label}: the identity must still be removed (one removal) "
+                f"once the run is filed; got {len(removals)}: {removals!r}")
+            self.assertIs(
+                removals[0].get("silent"), True,
+                f"{label}: removal must be silent=True; got {removals[0]!r}")
+        else:
+            self.assertEqual(
+                removals, [],
+                f"{label}: a run that opened no identity removes none; "
+                f"got {removals!r}")
         self.assertEqual(
             code, 128 + signum,
             f"{label}: a {signame}'d ingest exits 128+signum; got {code}; "
@@ -324,23 +345,28 @@ INGEST_HELD_SITES = (
     ("rust", "_rust_test_cmd", "/api/v2/runs"),
     ("arduino", "_arduino_test_cmd", "/api/v2/runs"),
     ("go", "_go_test_cmd", "/api/v2/runs"),
+    ("eda", "_eda_test_cmd", "/api/v2/runs"),
 )
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
 # writes for the 3-case run: their ingest body carries `data`, never a parse.
-# bun and arduino write one report; maven's surefire writes one per class.
-INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "arduino": 1}
+# bun, arduino and eda's pytest write one report; maven's surefire writes one
+# per class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "arduino": 1, "eda": 1}
 # The clients whose `test` run is closed from its runner's stream, by the
 # stream's codec: python's unittest run (CR-CRU-224) and rust's nextest run.
 STREAMED_CLIENTS = {"python": STREAM_CODEC, "rust": "nextest", "go": "go-test"}
+# The clients whose run opens no gated identity, so none is removed once the
+# run is filed: eda's run is opened under the agent the caller registered.
+NO_IDENTITY_CLIENTS = ("eda",)
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
 
-    def test_the_call_site_table_names_exactly_six_clients(self):
+    def test_the_call_site_table_names_exactly_seven_clients(self):
         self.assertEqual(
             {key for key, *_rest in INGEST_HELD_SITES},
-            {"bun", "python", "mvn", "rust", "arduino", "go"},
+            {"bun", "python", "mvn", "rust", "arduino", "go", "eda"},
             repr(INGEST_HELD_SITES))
 
     def test_every_clients_test_verb_files_the_run_on_sigterm_during_ingest(self):
@@ -353,7 +379,8 @@ class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
                 self._assert_ingest_signal_filed_the_run(
                     f"{key} test", signal.SIGTERM, code, stdout, stderr,
                     ingest_path, inline=INLINE_REPORT_CLIENTS.get(key),
-                    streamed=STREAMED_CLIENTS.get(key, False))
+                    streamed=STREAMED_CLIENTS.get(key, False),
+                    identity=key not in NO_IDENTITY_CLIENTS)
 
 
 if __name__ == "__main__":

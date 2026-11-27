@@ -58,6 +58,7 @@ CONFIG_NAME = "crucible.toml"
 CLIENT_FILES = {
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
     "bun": CLIENTS_DIR / "bun-crucible.py",
+    "eda": CLIENTS_DIR / "eda-crucible.py",
     "go": CLIENTS_DIR / "go-crucible.py",
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "python": CLIENTS_DIR / "python-crucible.py",
@@ -100,7 +101,8 @@ ESCAPED_FAILURE_HELP = "fix the cause this error names, then re-run the verb"
 SCRUBBED_ENV = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
                 "WORKFLOW_CYCLE", "CRUCIBLE_URL", "CRUCIBLE_BASE",
                 "PY_CRUCIBLE_PYTHON", "BUN_CRUCIBLE_PACKAGE_DIR",
-                "GO_CRUCIBLE_MODULE_DIR", "AGENT_ID", "CRUCIBLE_STREAM")
+                "GO_CRUCIBLE_MODULE_DIR", "EDA_CRUCIBLE_PYTHON", "AGENT_ID",
+                "CRUCIBLE_STREAM")
 
 _LOADS = itertools.count()
 
@@ -553,6 +555,12 @@ LINTER_MARKER = "no-board-marker-linter"
 LINT_TABLE = (f'[lint]\ncommand = ["{sys.executable}", "-c", '
               f'"print(\'{LINTER_MARKER}\')"]\nname = "{LINTER_MARKER}"\n')
 
+#: One eda entry over the probe's tests, so eda's gate has a suite to run.
+EDA_ENTRY = '\n[targets."unit"]\nframework = "eda-pytest"\npaths = ["tests"]\n'
+
+#: The clients with a `lint` verb. eda is excluded: it has no `lint` verb.
+LINT_CLIENTS = tuple(client for client in CLIENT_FILES if client != "eda")
+
 PROBE_TEST = (
     "import unittest\n\n\n"
     "class ProbeTest(unittest.TestCase):\n"
@@ -567,7 +575,7 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
 
     def setUp(self):
         super().setUp()
-        self.project_config.write_text(LINT_TABLE, encoding="utf-8")
+        self.project_config.write_text(LINT_TABLE + EDA_ENTRY, encoding="utf-8")
         (self.project_dir / "package.json").write_text('{"name": "no-board-fixture"}\n')
         tests = self.project_dir / "tests"
         tests.mkdir()
@@ -583,7 +591,7 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
     def test_lint_with_an_agent_refuses_before_the_declared_linter_is_spawned_on_every_client(self):
         """The pre-flight is the run's first board contact, so the refusal
         comes before the linter is spawned and nothing is posted."""
-        for client in CLIENT_FILES:
+        for client in LINT_CLIENTS:
             with self.subTest(client=client):
                 drive = run_client(
                     client, ["lint", "--agent", AGENT, "--project-dir", str(self.project_dir)],
@@ -620,7 +628,7 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
         """A `--cycle` attributes the run, so the pre-flight has no binding to
         ask about; it is still the run's first board contact, and with no
         board declared it refuses there, before the linter is spawned."""
-        for client in CLIENT_FILES:
+        for client in LINT_CLIENTS:
             with self.subTest(client=client):
                 drive = run_client(
                     client,

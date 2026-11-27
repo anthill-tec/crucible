@@ -25,8 +25,9 @@ from tests.client.client_interval_fakes import (
     fake_threading,
 )
 
-CLIENT_NAMES = ("arduino-crucible.py", "bun-crucible.py", "go-crucible.py",
-                "mvn-crucible.py", "python-crucible.py", "rust-crucible.py")
+CLIENT_NAMES = ("arduino-crucible.py", "bun-crucible.py", "eda-crucible.py",
+                "go-crucible.py", "mvn-crucible.py", "python-crucible.py",
+                "rust-crucible.py")
 BOARD = "http://127.0.0.1:9"
 STATUS_PATH = "/api/v2/health"
 

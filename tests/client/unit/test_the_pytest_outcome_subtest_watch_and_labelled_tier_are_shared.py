@@ -43,6 +43,7 @@ import unittest
 from tests.client import load_client
 
 # The shipped clients whose tier declaration surface predates labelled keys.
+# eda is excluded: its surface declares labelled keys (`<tier>/<label>`).
 UNLABELLED_CLIENTS = (
     "arduino-crucible.py",
     "bun-crucible.py",

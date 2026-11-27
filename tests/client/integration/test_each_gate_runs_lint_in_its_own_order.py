@@ -548,6 +548,10 @@ class _NoDefaultCases(_GateDrive):
                          f"a skipped lint files nothing; {why}")
 
 
+# One case per client whose gate runs a lint stage. eda is excluded: its gate
+# runs no lint stage yet, so it has no lint order to keep.
+
+
 # ── python ──────────────────────────────────────────────────────────────────
 
 class PythonGateRunsLintAfterCheckTest(_MalformedLintCases, _NoDefaultCases,

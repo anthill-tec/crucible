@@ -26,6 +26,8 @@ from tests.client import CLIENT_SOURCE_DIR
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LINT_MODULE = "_crucible_lint.py"
 REAL_HOME = os.path.expanduser("~")
+# Every client with a `lint` verb: eda is excluded, as it has no `lint` verb
+# yet, so an installed eda client has no `lint --help` to load the module.
 CLIENT_SCRIPTS = ("python-crucible.py", "bun-crucible.py", "rust-crucible.py",
                   "mvn-crucible.py", "arduino-crucible.py", "go-crucible.py")
 

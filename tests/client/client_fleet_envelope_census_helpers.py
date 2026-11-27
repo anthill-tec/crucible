@@ -40,6 +40,7 @@ CLIENT_FILES = {
     "python": CLIENTS_DIR / "python-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
     "go": CLIENTS_DIR / "go-crucible.py",
+    "eda": CLIENTS_DIR / "eda-crucible.py",
 }
 
 # An unreachable local address (nothing listens on port 1 without root) --
@@ -357,6 +358,56 @@ def write_go_module(directory, module=GO_PROBE_MODULE):
         "func Test_alpha_behaviour_passes(t *testing.T) {}\n")
 
 
+# An eda project the census drives: one passing pytest test in `EDA_PROBE_DIR`
+# and `[eda] python` naming this suite's own interpreter, which has pytest, so
+# an eda run verb resolves its interpreter. It declares no eda entry, as the
+# other stacks' census projects declare no tier: a drive that needs one
+# declares it (`declare_eda_entries`, `seed_eda_run`).
+EDA_PROBE_DIR = "eda_probe"
+EDA_FRAMEWORK = "eda-pytest"
+EDA_TIERS = ("unit", "module", "integration", "e2e", "bdd")
+
+
+def _append_to_config(directory, text):
+    config = Path(directory) / "crucible.toml"
+    config.write_text(config.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + text,
+                      encoding="utf-8")
+
+
+def write_eda_project(directory):
+    """Lay the eda probe down at `directory` and name the interpreter in the
+    `crucible.toml` already there."""
+    directory = Path(directory)
+    probe = directory / EDA_PROBE_DIR
+    probe.mkdir(parents=True, exist_ok=True)
+    (probe / "test_probe.py").write_text(
+        "def test_alpha_behaviour_passes():\n    assert 1 == 1\n")
+    _append_to_config(directory, f"[eda]\npython = {json.dumps(sys.executable)}\n")
+    return directory
+
+
+def declare_eda_entries(directory, keys):
+    """Declare one eda entry over the probe for each of `keys` (`<tier>` or
+    `<tier>/<label>`) in the project's `crucible.toml`."""
+    _append_to_config(directory, "".join(
+        f'[targets."{key}"]\nframework = "{EDA_FRAMEWORK}"\n'
+        f'paths = ["{EDA_PROBE_DIR}"]\n\n' for key in keys))
+
+
+def seed_eda_run(directory, verb):
+    """What an eda run verb needs beyond the census project to run the probe:
+    an entry for a tier verb's tier, a `unit` entry for `regression` and the
+    gate (each runs every entry), and, for `test`, the path it runs. Returns
+    the extra argv."""
+    if verb == "test":
+        return ["--tests", EDA_PROBE_DIR]
+    if verb in EDA_TIERS:
+        declare_eda_entries(directory, (verb,))
+    elif verb in ("regression", "pre-merge-gate"):
+        declare_eda_entries(directory, ("unit",))
+    return []
+
+
 _FAKE_TOOLS = {
     "go": _FAKE_GO_BODY,
     "cargo": _FAKE_CARGO_BODY,
@@ -460,6 +511,8 @@ def _make_project_dir(client_key):
         # nearest go.mod at or above it); its gate finds every go.mod under
         # the project dir. One module at the project dir serves both.
         write_go_module(d)
+    if client_key == "eda":
+        write_eda_project(d)
     return d
 
 

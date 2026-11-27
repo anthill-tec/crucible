@@ -73,6 +73,7 @@ CLIENT_FILES = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
     "go": CLIENTS_DIR / "go-crucible.py",
+    "eda": CLIENTS_DIR / "eda-crucible.py",
 }
 
 PROJECT_KEY = "cr091-roadmap-key"

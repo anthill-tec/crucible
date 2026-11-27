@@ -102,7 +102,9 @@ from tests.client.live_run_harness import (
     write_fake_python,
 )
 from tests.client.client_fleet_envelope_census_helpers import (
+    EDA_PROBE_DIR,
     fake_go_body,
+    write_eda_project,
     write_go_module,
 )
 from tests.client.integration.test_cr017_client_lifecycle import _Cr094PreflightBase
@@ -134,6 +136,9 @@ HELP_VERBS = (
     # go: the untagged run and the gate verbs (go's build-tag tier verbs
     # carry --release through the shared tier registration).
     + [("go-crucible.py", v) for v in ("test", "regression", "pre-merge-gate")]
+    # eda: likewise, its tier verbs carry --release through the shared tier
+    # registration.
+    + [("eda-crucible.py", v) for v in ("test", "regression", "pre-merge-gate")]
 )
 
 
@@ -199,6 +204,12 @@ def _go_test_setup(project_dir, bin_dir):
     return ["--project-dir", project_dir, "--reports", "reports"], {"FAKE_TOTAL": "1"}
 
 
+def _eda_test_setup(project_dir, bin_dir):
+    write_eda_project(project_dir)
+    return ["--tests", EDA_PROBE_DIR, "--project-dir", project_dir,
+            "--reports", "reports"], {}
+
+
 # (client script, verb, setup fn) — every one of these verbs ALREADY has
 # `--cycle` today (see the module docstring's inventory), so the round trip
 # below exercises the real `--release`-beside-`--cycle` mechanism §S1 asks
@@ -210,6 +221,7 @@ ROUND_TRIP_CASES = (
     ("rust-crucible.py", "regression-ingest", _rust_regression_ingest_setup),
     ("arduino-crucible.py", "unit", _arduino_unit_setup),
     ("go-crucible.py", "test", _go_test_setup),
+    ("eda-crucible.py", "test", _eda_test_setup),
 )
 
 

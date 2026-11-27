@@ -33,6 +33,7 @@ CLIENT_SCRIPTS = (
     "mvn-crucible.py",
     "arduino-crucible.py",
     "go-crucible.py",
+    "eda-crucible.py",
 )
 
 

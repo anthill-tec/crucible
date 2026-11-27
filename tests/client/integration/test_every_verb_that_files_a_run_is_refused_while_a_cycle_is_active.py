@@ -76,6 +76,9 @@ STEP_VERBS = {
     # compile step of its own, and its `lint` is proved refused by the
     # refusal itself, as every client's is.
     "go": ("test", "regression", "pre-merge-gate"),
+    # eda files a pytest run from each of its three running verbs, and
+    # ingests the reports it finds; it has no compile or lint step.
+    "eda": ("test", "regression", "pre-merge-gate", "auto-ingest"),
 }
 
 
@@ -154,7 +157,8 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
         result = drive_verb(
             CLIENT_FILES[client_key], argv, project_dir, bin_dir, timeout=120,
             board=self.board.url,
-            extra_env={"PY_CRUCIBLE_PYTHON": str(bin_dir / _PYTHON_WRAPPER)})
+            extra_env={"PY_CRUCIBLE_PYTHON": str(bin_dir / _PYTHON_WRAPPER),
+                       "EDA_CRUCIBLE_PYTHON": str(bin_dir / _PYTHON_WRAPPER)})
         emits, axi = classify_envelope(result.stdout, self.toon)
         return result, emits, axi or {}, _invocations(bin_dir), subparser
 

@@ -99,6 +99,7 @@ OTHER_STACKS = (
     ('framework = "nextest"\nstream = { codec = "nextest", path = "stdout" }\n'),
     ('framework = "surefire"\n'),
     ('framework = "vitest"\nstream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }\n'),
+    ('framework = "eda-pytest"\npaths = ["tests"]\ncoverage = "lcov"\n'),
 )
 
 _CASES = (("spins_up", "pass"), ("stops", "pass"), ("brakes", "pass"))
