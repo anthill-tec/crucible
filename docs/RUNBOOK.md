@@ -469,7 +469,7 @@ CI's `test-bun` and `test-python` jobs run the same script, one tier each, insid
 
 Add `--hermetic` to any client's tier verb (`unit`, `module`, `integration`, `e2e`, `regression`, `bdd`), to `test`,
 or to `pre-merge-gate`. The test runner then runs behind a tripwire, so a test that reaches the operator's board, home
-or network turns the run red. Every client accepts the flag: python, bun, rust, mvn, arduino and go.
+or network turns the run red. Every client accepts the flag: python, bun, rust, mvn, arduino, go and eda.
 
 The client itself stays outside the namespace, so it can still reach the board. Only the runner and the tripwire run
 inside it, in the project's working tree:
@@ -701,6 +701,52 @@ declared `junit-integration` joins it, and a declared `junit-e2e` is excluded. A
 **The stream key.** A declared target's `[targets.*]` key in `crucible.toml` is `<dir>/junit-<tier>`, the directory
 it runs in joined by `/` to the target, as `tests/native/junit-integration`. A run in a place is keyed by that place,
 as `tests/sim/junit`.
+
+## EDA tier verbs
+
+The eda client, `eda-crucible.py`, runs an electronics project's pytest gates and files each run under the
+`eda-pytest` framework.
+
+**The declaration.** A tier is declared by its eda entries in the project dir's `crucible.toml`. An entry is a
+`[targets."<tier>"]` or `[targets."<tier>/<label>"]` table with `framework = "eda-pytest"` and `paths`, a non-empty
+list of paths relative to the project dir, each optionally followed by `::<node id>`:
+
+```toml
+[targets."unit"]
+framework = "eda-pytest"
+paths = ["tests/unit"]
+
+[targets."integration/sim"]
+framework = "eda-pytest"
+paths = ["tests/sim"]
+```
+
+Each entry is its own pytest run, in key order; `--entry <key>` runs one. A tier with no entry is refused. The project
+dir is `--project-dir`, else `EDA_CRUCIBLE_PROJECT_DIR`, else the git repo of the working directory, else the working
+directory. A project whose eda work lives in a sub-project (`hardware/`) names it with `--project-dir hardware`; the
+key is then read from `hardware/.env` only.
+
+**The venv.** pytest runs in the project's interpreter, never the client's: `--python`, else `EDA_CRUCIBLE_PYTHON`,
+else `[eda] python` in `crucible.toml` (relative to the project dir), else `<project-dir>/.venv/bin/python`. The
+chosen interpreter must import pytest; with none found, or one that cannot, the verb is refused naming every
+candidate.
+
+```toml
+[eda]
+python = ".venv/bin/python"
+```
+
+**SKIP.** A test that cannot run yet calls `pytest.skip`. The board files it as `pending`. A run whose filed tests
+are all pending has the verdict `skip` and a `tier-skipped` warning naming its tier, and exits 0. The envelope lists
+the skipped tests with their reasons in `skipped[]`, at most 20, and counts the rest in `skippedNotListed`.
+
+**`pending` against `skipped[]`.** The two can differ:
+
+- a module-level skip and an xfail count in `pending`, but are not listed in `skipped[]`;
+- the `tier-skipped` count includes xfails.
+
+The skip reasons are read from pytest's `-v` console. A `PYTEST_ADDOPTS=-q` in the environment takes those lines away,
+so every listed skip's `reason` is `null`.
 
 ## Schema versions and migration
 

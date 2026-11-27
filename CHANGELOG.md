@@ -35,7 +35,8 @@ Releases before 0.3.0 are described only on GitHub Releases.
   `e2e` entries excluded. The board groups an `eda-pytest` run's cases by class, as it does a pytest run. The
   shared run module now holds the outcome of a finished pytest run (`pytest_run_outcome`), the passing-subtest
   watch (`PytestSubtestWatch`) and a headless-capable probe (`pytest_importable(..., env=)`); the python client
-  uses them, with its behaviour unchanged. Installing the client and naming it in the schema is still to come.
+  uses them, with its behaviour unchanged. The installer lays the client down with the fleet, and the schema
+  declares its `eda` stack (see "Stack declaration changes").
 - **A gate runs the project's declared unit check.** A project may declare a `[unit-check]` table in its
   `crucible.toml` (`command`, a non-empty list of non-empty strings, and an optional `name`). Every client's
   `pre-merge-gate` runs it right after its lint stage, in lint's directory, with the gate's environment
@@ -133,6 +134,30 @@ Releases before 0.3.0 are described only on GitHub Releases.
   first. A heartbeat does not move an agent in this order. The project list, the open-run list and
   the stale-run sweep also keep a fixed order now when two rows share a millisecond: the order they
   were written in.
+
+### Stack declaration changes
+
+The stack declaration schema:
+
+- **Version 4 adds the `eda` stack.** `crucible-declaration.schema.json` gains an `eda` stack: an entry is a
+  `[targets."<tier>"]` or `[targets."<tier>/<label>"]` table in `crucible.toml` with `framework = "eda-pytest"`
+  and `paths`, and the stack's own `[eda]` table declares `python`. `reserved_frameworks.eda` is
+  `["eda-pytest"]`, and `skip_rule.readers` names `eda`.
+- **The new vocabulary.** A field's `values` can be a `list` (`{list: {min, items}}`), and a `path` can say it must
+  `exist` (`exists: true`) and may carry a pytest node id after a separator (`node_id: "::"`). A path can also be
+  required to be an executable file (`{path: {is: "executable"}}`). An entry's `key` can name its `tiers` and its
+  `label` rule (`"non-empty"`), for a key of the form `tier[/label]`. An entry's `frameworkless` says what its
+  reader does with an entry that names no framework (`"skipped"` for eda, which leaves such an entry to rust).
+
+For the rust, arduino and maven stacks (`crucible.toml`):
+
+- **`eda-pytest` joins the skip set.** An `eda-pytest` entry is another stack's entry to each of them: it is
+  skipped, and nothing in it is refused.
+
+For the eda stack (`crucible.toml`):
+
+- **No board field carries ERC, DRC or LVS counts.** A project's gates assert them, and a failing gate's message
+  names them; the board files the gate as a test like any other.
 
 ## [0.4.0] - 2026-11-21
 
