@@ -53,8 +53,8 @@ DECLARED but did not enforce: the copy is CONFINED to `<target-dir>/clients/`
 never followed, because both `os.path.isfile` and `Path.write_bytes` traverse a
 link and would otherwise write a client's bytes into a file the operator never
 pointed `--target-dir` at -- and a landed file carries its SOURCE's mode bits,
-so the three executable clients do not arrive 0o644 under the umask and die
-with "Permission denied" when run directly.
+so an executable source does not arrive 0o644 under the umask and die with
+"Permission denied" when run directly, and a restrictive one is not widened.
 
 NOT this cycle (owned elsewhere in plan 89): the
 `manifest.source_clients_dir()` single resolver (§S2/AC7) and the `cli.main()`
@@ -92,7 +92,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # checkout and what the wheel force-includes as `crucible_axi/clients`.
 SOURCE_CLIENTS_DIR = CLIENT_SOURCE_DIR
 
-# §S1 -- the packaged fleet, exactly. Five clients plus the two shared modules
+# The packaged fleet, exactly. Seven clients plus the shared modules
 # they load by file path plus the status contract the manifest publishes.
 EXPECTED_FLEET_FILES = frozenset({
     "bun-crucible.py",
@@ -101,6 +101,7 @@ EXPECTED_FLEET_FILES = frozenset({
     "mvn-crucible.py",
     "arduino-crucible.py",
     "go-crucible.py",
+    "eda-crucible.py",
     "_crucible_axi.py",
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports: a fleet landed without it cannot load its
@@ -389,7 +390,7 @@ class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
         self.assertEqual(
             landed, set(EXPECTED_FLEET_FILES),
             f"AC2 -- <target-dir>/clients/ must hold EXACTLY the "
-            f"{len(EXPECTED_FLEET_FILES)} packaged files (five clients + the "
+            f"{len(EXPECTED_FLEET_FILES)} packaged files (seven clients + the "
             f"shared modules they load by path + STATUS-CONTRACT.md + the "
             f"shipped crucible.toml + subtest_runner.py), no extras. "
             f"missing={sorted(set(EXPECTED_FLEET_FILES) - landed)} "
@@ -818,11 +819,11 @@ from tests.client.manifest_contract import (  # noqa: E402
 )
 
 EXPECTED_CLIENT_STACKS = frozenset({
-    "bun", "python", "rust", "mvn", "arduino", "go",
+    "bun", "python", "rust", "mvn", "arduino", "go", "eda",
 })
 
 # The `status` entry is published at top level, not inside `clients`; the guard
-# treats it as a sixth published path with identical obligations.
+# treats it as one more published path with identical obligations.
 STATUS_MANIFEST_KEY = "status"
 
 
@@ -879,7 +880,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         on 0.1.2, where all six name package-external paths nothing created."""
         self.assertEqual(
             set(self.document.get("clients", {})), EXPECTED_CLIENT_STACKS,
-            f"AC3 -- the manifest must publish exactly the five client stacks "
+            f"the manifest must publish exactly the seven client stacks "
             f"{sorted(EXPECTED_CLIENT_STACKS)}; got "
             f"{sorted(self.document.get('clients', {}))}")
         published = self.published_paths()
@@ -943,7 +944,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         """§S3 -- `build_manifest` "keeps its signature and its keys": the
         contract is tightened by TEST, not by shape. So the guard also pins
         that nothing was ADDED -- the unconditional keys all present, nothing
-        outside the declared contract published, `clients` a five-entry mapping
+        outside the declared contract published, `clients` a seven-entry mapping
         of stack to string path, and a non-empty `version`.
 
         CR-CRU-143 §S1 -- the key set is judged as a CLOSED BOUND, not by exact
@@ -986,7 +987,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         clients = self.document["clients"]
         self.assertEqual(
             EXPECTED_CLIENT_STACKS, set(clients),
-            f"§S3 -- `clients` must map exactly the five stacks; got "
+            f"`clients` must map exactly the seven stacks; got "
             f"{sorted(clients)}")
         non_strings = sorted(
             f"clients.{stack} -> {value!r}"
@@ -1124,10 +1125,10 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
 # clients-only-copy defect §S1 warns about -- "a copy without them yields five
 # unrunnable clients".
 
-# The five stacks, as the manifest keys them. Parity matters: the `fleet` stage
+# The seven stacks, as the manifest keys them. Parity matters: the `fleet` stage
 # copies a tuple, and a guard that only exercised `python` would pass a stage
-# that dropped, truncated or mis-copied any of the other four.
-COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
+# that dropped, truncated or mis-copied any of the other six.
+COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go", "eda")
 
 # AC4's literal subject: `python3 <target-dir>/clients/python-crucible.py --help`.
 AC4_CLIENT_STACK = "python"
@@ -1140,15 +1141,18 @@ AC4_CLIENT_STACK = "python"
 RUN_MODULE_LOADER = "_axi_run"
 SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"),
                          (RUN_MODULE_LOADER, "_crucible_run.py"))
-# The go client loads only the shared modules it uses: it encodes nothing
-# itself, so it has no `_toon()` loader (orchestrator-approved re-seed fix).
-GO_SHARED_MODULE_LOADERS = tuple(loader for loader in SHARED_MODULE_LOADERS
-                                 if loader[0] != "_toon")
+# The go and eda clients load only the shared modules they use: they encode
+# nothing themselves, so neither has a `_toon()` loader.
+CLIENTS_WITHOUT_A_TOON_LOADER = frozenset({"go", "eda"})
+NO_TOON_SHARED_MODULE_LOADERS = tuple(loader for loader in SHARED_MODULE_LOADERS
+                                      if loader[0] != "_toon")
 
 
 def _shared_module_loaders(stack):
     """The by-path loaders `stack`'s copied client is probed through."""
-    return GO_SHARED_MODULE_LOADERS if stack == "go" else SHARED_MODULE_LOADERS
+    if stack in CLIENTS_WITHOUT_A_TOON_LOADER:
+        return NO_TOON_SHARED_MODULE_LOADERS
+    return SHARED_MODULE_LOADERS
 
 # Bounded so a wedged interpreter fails the test instead of hanging the suite.
 # `--help` is argparse-only work; a second would do, 60 is slack for a loaded
@@ -1428,12 +1432,11 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
 #     CREATES an outside file that was never there.
 #
 # The second rule is the mode: `Path.write_bytes` creates with the process
-# umask, so `bun-crucible.py`, `rust-crucible.py` and `mvn-crucible.py` (0o755
-# at source) land 0o644 and an operator running
-# `~/.crucible/clients/rust-crucible.py` directly gets "Permission denied".
-# Source modes are read at RUNTIME, never hardcoded: the repo fleet's modes are
-# deliberately mixed (three of them executable), and hardcoding them here
-# would just re-assert the fixture.
+# umask, so an executable source would land 0o644 and an operator running it
+# directly from `~/.crucible/clients/` would get "Permission denied".
+# Source modes are read at RUNTIME, never hardcoded: the repo fleet's own
+# modes are not this suite's to pin, so stand-in modes are set on the source
+# below rather than re-asserting whatever the checkout happens to carry.
 
 SENTINEL_TEMPLATE = (
     b"operator's own file, OUTSIDE the install root -- the [fleet] stage must "

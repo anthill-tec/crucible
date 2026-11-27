@@ -56,6 +56,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
     enumerate_verbs,
+    seed_eda_run,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -116,6 +117,10 @@ class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
             f"— {sorted(verbs)!r}")
         argv = build_argv(verb_name, verbs[verb_name], project_dir)
         argv = argv + ["--agent", agent_id] + list(extra_argv)
+        if client_key == "eda":
+            # eda's gate runs the entries the project declares, and its
+            # `test` only the paths it is named.
+            argv += seed_eda_run(project_dir, verb_name)
         result = drive_verb(script_path, argv, project_dir, fake_bin_dir,
                             timeout=90, board=self.board.url)
         emits, axi = classify_envelope(result.stdout, self.toon)

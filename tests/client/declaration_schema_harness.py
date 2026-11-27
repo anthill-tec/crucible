@@ -1,5 +1,5 @@
 """Shared seams for the declaration-schema tests: the shipped descriptor, the
-six clients loaded by file path, a temporary project dir, and a small
+seven clients loaded by file path, a temporary project dir, and a small
 interpreter of the descriptor's vocabulary.
 
 The descriptor (`clients/crucible-declaration.schema.json`) is plain JSON:
@@ -13,15 +13,28 @@ The descriptor (`clients/crucible-declaration.schema.json`) is plain JSON:
 
 An `entry` (null for python and go, which read no `[targets]` entry) carries `key`,
 `open`, `other_stacks` ("skipped" | "refused"), `refused` (field names),
-`requires` (entry level: `{"one_of": [field, ...]}`), `fields` and `shape`.
+`requires` (entry level: `{"one_of": [field, ...]}`), `fields` and `shape`,
+and optionally `frameworkless` ("skipped": the reader skips an entry with no
+`framework`; a stack that omits it keeps the older meaning, that such an
+entry is rust's). A `key` may carry `tiers` (the allowed first segment) and
+`label: "non-empty"` (the `/<label>` part, when present, is non-empty).
 
 A field descriptor carries `default`, `required`, and either nested `fields`
-(an object field) or `values` in one of four forms:
+(an object field) or `values` in one of these forms:
 
     [v, ...]                          a list
     {"pattern": [template, ...]}      `<NAME>` stands for a non-blank name
     {"board-listed": "codecs.<kind>"} an open codec name, checked at run time
     {"path": {"holds": "<file>"}}     a directory holding <file>, at run time
+    {"list": {"min": n, "items": F}}  a list of at least n items, each of form F
+    {"path": {"exists": true,         a path relative to the project dir that
+              "node_id": "::"}}       exists, optionally followed by ::<node id>
+                                      (the part before :: must exist)
+    {"path": {"is": "executable"}}    a path relative to the project dir naming
+                                      an executable file
+
+A path value is judged against the path fixture (`write_path_fixture`): the
+files and directories it lays down are the ones that exist.
 
 and optionally the cross-field rules `requires` (`{field: true}` for "must be
 present", `{field: [v, ...]}` for "must hold one of"), `excludes` ([field,
@@ -44,8 +57,8 @@ from tests.client import CLIENT_SOURCE_DIR, load_client
 
 SCHEMA_PATH = CLIENT_SOURCE_DIR / "crucible-declaration.schema.json"
 
-STACKS = ("bun", "rust", "arduino", "maven", "python", "go")
-TARGETS_READERS = ("rust", "arduino", "maven")
+STACKS = ("bun", "rust", "arduino", "maven", "python", "go", "eda")
+TARGETS_READERS = ("rust", "arduino", "maven", "eda")
 
 ACCEPTED, REFUSED, SKIPPED, UNDECLARED = "accepted", "refused", "skipped", "undeclared"
 
@@ -54,13 +67,27 @@ WRONG_VALUE = "not-a-declared-value"
 UNLISTED_FIELD = "x_writer_note"
 SAMPLE_CODEC = "sample-codec"
 SAMPLE_NAME = "CRUCIBLE_SAMPLE_NAME"
+SAMPLE_LABEL = "board"
+
+# The path fixture: what exists in a project dir a path value is judged in.
+FIXTURE_DIR = "tests/unit"
+FIXTURE_FILE = "tests/unit/test_sample.py"
+FIXTURE_NODE = "test_sample"
+FIXTURE_EXECUTABLE = "tools/python"
+MISSING_PATH = "tests/absent/test_absent.py"
+NOT_A_PATH = 7
+_FIXTURE_EXISTING = frozenset({"tests", FIXTURE_DIR, FIXTURE_FILE, "tools",
+                               FIXTURE_EXECUTABLE})
+_FIXTURE_EXECUTABLES = frozenset({FIXTURE_EXECUTABLE})
 
 # The key each `[targets]` reader is driven under.
-READER_KEYS = {"rust": "ci", "arduino": "tests/native/unit", "maven": "e2e"}
+READER_KEYS = {"rust": "ci", "arduino": "tests/native/unit", "maven": "e2e",
+               "eda": "unit"}
 
 _CLIENT_FILES = {"bun": "bun-crucible.py", "rust": "rust-crucible.py",
                  "arduino": "arduino-crucible.py", "maven": "mvn-crucible.py",
-                 "python": "python-crucible.py", "go": "go-crucible.py"}
+                 "python": "python-crucible.py", "go": "go-crucible.py",
+                 "eda": "eda-crucible.py"}
 _LOADED = {}
 
 
@@ -160,17 +187,53 @@ def write_package(project_dir, manifest):
     Path(project_dir, "package.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
+def write_targets_entries(project_dir, entries):
+    """`crucible.toml` holding one `[targets]` entry per `{key: entry}`: an
+    entry that is not a table is written under a leading `[targets]`."""
+    scalars = {k: v for k, v in entries.items() if not isinstance(v, dict)}
+    entries = {k: v for k, v in entries.items() if isinstance(v, dict)}
+    head = "[targets]\n" + "".join(
+        f"{toml_key(k)} = {toml_value(v)}\n" for k, v in scalars.items()) + "\n"
+    body = (head if scalars else "") + "".join(
+        f"[targets.{toml_key(key)}]\n" + "".join(
+            f"{toml_key(k)} = {toml_value(v)}\n" for k, v in entry.items()) + "\n"
+        for key, entry in entries.items())
+    Path(project_dir, "crucible.toml").write_text(body, encoding="utf-8")
+
+
+def write_path_fixture(project_dir):
+    """Lay down the path fixture under `project_dir`: a test directory, a
+    test file in it (not executable) and an executable file."""
+    Path(project_dir, FIXTURE_DIR).mkdir(parents=True, exist_ok=True)
+    test_file = Path(project_dir, FIXTURE_FILE)
+    test_file.write_text(f"def {FIXTURE_NODE}():\n    pass\n", encoding="utf-8")
+    test_file.chmod(0o644)
+    executable = Path(project_dir, FIXTURE_EXECUTABLE)
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+
+
 # --------------------------------------------------------------------------- #
 # What each client does with an entry
 # --------------------------------------------------------------------------- #
 def reader_verdict(stack, project_dir, key):
     """What a `[targets]` reader makes of the project's crucible.toml for `key`:
     rust answers ACCEPTED for no refusal (it cannot tell a skipped entry from
-    its own), arduino and maven ACCEPTED / SKIPPED-or-UNDECLARED / REFUSED."""
+    its own), arduino and maven ACCEPTED / SKIPPED-or-UNDECLARED / REFUSED;
+    eda reads the whole declaration, and answers ACCEPTED when it holds an
+    entry under `key`, UNDECLARED when it holds none (skipped or absent), and
+    REFUSED when the declaration is refused."""
     module = client(stack)
     if stack == "rust":
         refusal = module._targets_refusal(project_dir, key)
         return ACCEPTED if refusal is None else REFUSED
+    if stack == "eda":
+        try:
+            declaration = module._read_declaration(project_dir)
+        except declaration_refused(stack):
+            return REFUSED
+        return ACCEPTED if any(e.key == key for e in declaration.entries) else UNDECLARED
     path = os.path.join(project_dir, "crucible.toml")
     try:
         declared = module._declared_entry(path, key)
@@ -179,13 +242,16 @@ def reader_verdict(stack, project_dir, key):
     return ACCEPTED if declared is True else UNDECLARED
 
 
-def entry_verdict(stack, project_dir, entry):
-    """The client's verdict on one entry, written to a fresh crucible.toml (or
-    read directly, for bun's pure entry check)."""
+def entry_verdict(stack, project_dir, entry, key=None):
+    """The client's verdict on one entry, written to a fresh crucible.toml
+    under `key` (the reader's own key by default), or read directly, for bun's
+    pure entry check. An eda entry is judged beside the path fixture."""
     if stack == "bun":
         _target, refusal = client("bun")._read_target_entry("crucible.targets.k", entry)
         return ACCEPTED if refusal is None else REFUSED
-    key = READER_KEYS[stack]
+    key = READER_KEYS[stack] if key is None else key
+    if stack == "eda":
+        write_path_fixture(project_dir)
     write_targets_toml(project_dir, key, entry)
     return reader_verdict(stack, project_dir, key)
 
@@ -215,7 +281,11 @@ def value_ok(desc, value):
             if not value_ok(sub, value[name]):
                 return False
         return True
-    values = desc["values"]
+    return values_ok(desc["values"], value)
+
+
+def values_ok(values, value):
+    """Whether `value` is one the `values` form allows."""
     if isinstance(values, list):
         return value in values
     if "pattern" in values:
@@ -225,7 +295,56 @@ def value_ok(desc, value):
             _template_regex(t).match(value) for t in templates)
     if "board-listed" in values:
         return isinstance(value, str) and bool(value.strip())
+    if "list" in values:
+        form = values["list"]
+        return (isinstance(value, list) and len(value) >= form["min"]
+                and all(values_ok(form["items"], item) for item in value))
+    if "path" in values:
+        return _path_ok(values["path"], value)
     raise AssertionError(f"no entry-level check for values {values!r}")
+
+
+def _path_ok(form, value):
+    """Whether `value` names what the path form asks for, in the path fixture."""
+    if form.get("is") == "executable":
+        return isinstance(value, str) and value in _FIXTURE_EXECUTABLES
+    if form.get("exists") is True:
+        if not isinstance(value, str):
+            return False
+        separator = form.get("node_id")
+        named = value.split(separator, 1)[0] if separator else value
+        return named in _FIXTURE_EXISTING
+    raise AssertionError(f"no entry-level check for the path form {form!r}")
+
+
+def key_ok(key_desc, key):
+    """Whether `key` is one the key descriptor allows: any key, unless it
+    states `tiers` (the first segment must be one) and `label: non-empty`
+    (a `/<label>` part, when present, must be non-empty)."""
+    tiers = key_desc.get("tiers")
+    if tiers is None:
+        return True
+    tier, slash, label = key.partition("/")
+    if tier not in tiers:
+        return False
+    return not (slash and key_desc.get("label") == "non-empty" and not label)
+
+
+def sample_keys(key_desc):
+    """Every key form the key descriptor allows: each tier bare, and each tier
+    with a sample label when the descriptor states a label."""
+    tiers = list(key_desc["tiers"])
+    labelled = [f"{t}/{SAMPLE_LABEL}" for t in tiers] if "label" in key_desc else []
+    return tiers + labelled
+
+
+def wrong_keys(key_desc):
+    """Keys generated to probe the key descriptor's edges: a tier it does not
+    list (bare and labelled), and an empty label under its first tier."""
+    wrong = [WRONG_VALUE, f"{WRONG_VALUE}/{SAMPLE_LABEL}"]
+    if key_desc.get("label") == "non-empty":
+        wrong.append(f"{key_desc['tiers'][0]}/")
+    return wrong
 
 
 def _holds(entry, fields, name, wanted):
@@ -241,13 +360,18 @@ def other_frameworks(schema, stack):
             if owner != stack for fw in fws}
 
 
-def schema_verdict(schema, stack, entry):
-    """What the descriptor says `stack`'s client makes of `entry`."""
+def schema_verdict(schema, stack, entry, key=None):
+    """What the descriptor says `stack`'s client makes of `entry` (under
+    `key`, when one is given and the key descriptor constrains it)."""
     desc = schema["stacks"][stack]["entry"]
     if not isinstance(entry, dict):
         return desc["shape"]["entry_not_a_table"]
+    if "framework" not in entry and desc.get("frameworkless") == SKIPPED:
+        return SKIPPED
     if entry.get("framework") in other_frameworks(schema, stack):
         return desc["other_stacks"]
+    if key is not None and not key_ok(desc["key"], key):
+        return REFUSED
     fields = desc["fields"]
     if any(f in entry for f in desc.get("refused", [])):
         return REFUSED
@@ -279,18 +403,36 @@ def sample_values(desc):
     open codec name."""
     if "fields" in desc:
         return [complete_value(desc)]
-    values = desc["values"]
+    found = values_samples(desc["values"])
+    return found + [v for v in (desc.get("when") or {}) if v not in found]
+
+
+def values_samples(values):
+    """Every value a `values` form allows, a sample standing in for a pattern,
+    an open codec name or a path (one from the path fixture); for a list form,
+    each item sample alone and all of them together."""
     if isinstance(values, list):
-        found = list(values)
-    elif "pattern" in values:
+        return list(values)
+    if "pattern" in values:
         templates = values["pattern"]
         templates = [templates] if isinstance(templates, str) else templates
-        found = [re.sub(r"<[A-Za-z_]+>", SAMPLE_NAME, t) for t in templates]
-    elif "board-listed" in values:
-        found = [SAMPLE_CODEC]
-    else:
-        raise AssertionError(f"no sample for values {values!r}")
-    return found + [v for v in (desc.get("when") or {}) if v not in found]
+        return [re.sub(r"<[A-Za-z_]+>", SAMPLE_NAME, t) for t in templates]
+    if "board-listed" in values:
+        return [SAMPLE_CODEC]
+    if "list" in values:
+        form = values["list"]
+        items = values_samples(form["items"])
+        found = [[item] * max(form["min"], 1) for item in items]
+        if len(items) > 1 and len(items) >= form["min"]:
+            found.append(list(items))
+        return found
+    if "path" in values and values["path"].get("is") == "executable":
+        return [FIXTURE_EXECUTABLE]
+    if "path" in values and values["path"].get("exists") is True:
+        separator = values["path"].get("node_id")
+        node = [f"{FIXTURE_FILE}{separator}{FIXTURE_NODE}"] if separator else []
+        return [FIXTURE_FILE, FIXTURE_DIR] + node
+    raise AssertionError(f"no sample for values {values!r}")
 
 
 def wrong_values(desc):
@@ -306,7 +448,16 @@ def wrong_values(desc):
             probes.append({k: v for k, v in base.items() if k != name})
             probes.extend({**base, name: w} for w in wrong_values(sub))
         return probes
-    values = desc["values"]
+    return values_wrong(desc["values"])
+
+
+def values_wrong(values):
+    """Values a `values` form refuses. For a list form: a value that is not a
+    list, a list shorter than its minimum, a list of each wrong item, and a
+    sample item beside a wrong one. For a path that must exist: a missing
+    path (with a node id, when the form allows one) and a non-string. For an
+    executable file: a file that is not executable, a directory, a missing
+    path, an empty string and a non-string."""
     if isinstance(values, list):
         return [WRONG_VALUE]
     if "pattern" in values:
@@ -316,6 +467,18 @@ def wrong_values(desc):
                                 if re.search(r"<[A-Za-z_]+>", t)]
     if "board-listed" in values:
         return ["", 7]
+    if "list" in values:
+        form = values["list"]
+        wrong_items = values_wrong(form["items"])
+        short = [[]] if form["min"] >= 1 else []
+        mixed = [[values_samples(form["items"])[0], wrong_items[0]]]
+        return [WRONG_VALUE] + short + [[w] for w in wrong_items] + mixed
+    if "path" in values and values["path"].get("is") == "executable":
+        return [FIXTURE_FILE, FIXTURE_DIR, MISSING_PATH, "", NOT_A_PATH]
+    if "path" in values and values["path"].get("exists") is True:
+        separator = values["path"].get("node_id")
+        node = [f"{MISSING_PATH}{separator}{FIXTURE_NODE}"] if separator else []
+        return [MISSING_PATH] + node + [NOT_A_PATH]
     return [WRONG_VALUE]
 
 
@@ -329,8 +492,10 @@ def complete_entries(schema, stack, framework=None):
     entries it accepts whose fields no other accepted entry extends (bun's
     fullest `junit` entry and its `stream` entry alike), so a skip is tested on
     a full entry, never a bare framework."""
+    listed = set(schema["stacks"][stack]["entry"]["fields"])
     candidates = [c for c in candidate_entries(schema, stack)
                   if isinstance(c, dict) and not carries_unlisted(c)
+                  and set(c) <= listed
                   and schema_verdict(schema, stack, c) == ACCEPTED
                   and (framework is None or c.get("framework", framework) == framework)]
     if framework is not None:

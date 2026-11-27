@@ -59,6 +59,8 @@ CLIENTS = CLIENT_SOURCE_DIR
 EMITTER = "emit_run_axi"
 
 # Each client's run wrapper: the one function that calls the shared emitter.
+# eda is excluded: it takes no coverage run, so its envelope has no coverage
+# to name.
 WRAPPERS = {"bun-crucible.py": "_emit_ingest_axi",
             "python-crucible.py": "_emit_ingest_axi",
             "mvn-crucible.py": "_emit_run_axi",

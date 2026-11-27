@@ -6,7 +6,7 @@ workflow. It is two cooperating stacks behind one product:
 - a **Bun server** (`src/server.ts`) that ingests test runs, tracks agents,
   cycles and events, and streams live changes over SSE; and
 - a **Python client fleet** (`crucible-axi` — `_crucible_axi.py` plus the
-  per-stack `{bun,python,rust,mvn,arduino,go}-crucible.py` scripts) that runs a
+  per-stack `{bun,python,rust,mvn,arduino,go,eda}-crucible.py` scripts) that runs a
   stack's tests AND ingests the results to the server under an agent id. A new
   project registers itself with any client's `project-create` verb, which
   creates the project on the board, or finds it, by its token.
@@ -43,10 +43,11 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the six clients, the seven shared modules
+`*-crucible.py` **client fleet** (the seven clients, the nine shared modules
 they load by path — `_crucible_axi.py`, `_crucible_run.py`,
 `_crucible_release.py`, `_crucible_project.py`, `_crucible_lint.py`,
-`_crucible_board.py` and `toon.py` — the
+`_crucible_board.py`, `_crucible_hermetic.py`, `_crucible_tripwire.py` and
+`toon.py` — the
 `subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
 shipped `crucible.toml` limit defaults, the shipped Vitest and Playwright
 reporters under `reporters/` and the stack-declaration schema
@@ -178,7 +179,7 @@ bun suite and both client tiers in one run.
 - [docs/RUNBOOK.md](https://github.com/anthill-tec/crucible/blob/master/docs/RUNBOOK.md) — operating the server (start/stop, db
   path, health, port/bind config).
 - `clients/` — the per-stack reporting clients
-  (`{bun,python,rust,mvn,arduino,go}-crucible.py`) plus the shared TOON-AXI
+  (`{bun,python,rust,mvn,arduino,go,eda}-crucible.py`) plus the shared TOON-AXI
   envelope module every one of them emits through. The Go client,
   `go-crucible.py`, streams `go test -json` to the board; it needs go 1.24 or
   later. Its `check` compiles the module (`go build ./...`), `check --tests`
@@ -199,6 +200,32 @@ bun suite and both client tiers in one run.
   `run <event-id> --files <n>|all` lists a stored run's files in the same
   block, and a gate composed of several runs states each run's block as a row
   of `coverageRuns`.
+  The EDA client, `eda-crucible.py`, runs an electronics project's pytest
+  gates in the project's own interpreter and files each run's JUnit report
+  under the `eda-pytest` framework. Its verbs are `test --tests <path or node
+  id> …` (one run with no tier), the tier verbs `unit`, `module`,
+  `integration`, `e2e` and `bdd`, `regression`, `pre-merge-gate` and
+  `auto-ingest`, beside the fleet's lifecycle, plan, cycle and status verbs.
+  Its project dir is `--project-dir`, else `EDA_CRUCIBLE_PROJECT_DIR`, else
+  the git repo of the working directory, else the working directory; a
+  project whose eda work lives in a sub-project (`hardware/`) names that
+  directory explicitly. Its key is `CRUCIBLE_PROJECT_KEY` from
+  `<project-dir>/.env` only, never a parent's. Its interpreter is `--python`,
+  else `EDA_CRUCIBLE_PYTHON`, else `crucible.toml` `[eda] python` (relative
+  to the project dir), else `<project-dir>/.venv/bin/python`; the client's
+  own interpreter is never used, and the chosen one must import pytest. A
+  tier is declared by its eda entries, `[targets."<tier>"]` or
+  `[targets."<tier>/<label>"]` with `framework = "eda-pytest"` and `paths`;
+  each entry is its own pytest run, and `--entry` runs one. It refuses `test`
+  without `--tests`, a tier with no entry, `regression` and `pre-merge-gate`
+  in a project with no entry, a declaration it cannot read, and an
+  interpreter it cannot find or that cannot import pytest. Each run's
+  verdict is `fail`, `skip` (only skipped tests filed) or `pass`, and the
+  envelope lists the skipped tests with their reasons (`skipped[]`, at most
+  20, the rest counted in `skippedNotListed`). The gate runs each entry as
+  its own suite; `e2e` is listed and excluded. A project's verification
+  levels map onto the tiers: L1 → `unit`, L1b → `module`, L2 →
+  `integration`, L3 → `e2e` (excluded from the gate); `bdd` is unused.
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 

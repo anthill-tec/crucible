@@ -163,8 +163,9 @@ class EveryClientsTopLevelHelpNamesTheBoardConfigurationTest(unittest.TestCase):
 
     def test_every_clients_top_level_help_names_the_client_url_key(self):
         self.assertEqual(
-            sorted(self.helps), ["arduino", "bun", "go", "mvn", "python", "rust"],
-            "the help census must cover exactly the five clients")
+            sorted(self.helps),
+            ["arduino", "bun", "eda", "go", "mvn", "python", "rust"],
+            "the help census must cover exactly the seven clients")
         offenders = {}
         for client_key in CLIENT_FILES:
             description = self.description_of(client_key)

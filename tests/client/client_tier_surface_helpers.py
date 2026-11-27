@@ -25,14 +25,17 @@ CLIENT_FILES = {
     # go joined the fleet's tier surface when its tiers became declared by
     # build tag: it registers the six through the same shared registrar.
     "go": CLIENT_SOURCE_DIR / "go-crucible.py",
+    # eda registers the six through the same shared registrar: `regression`
+    # wired with its own flags, the other five declared by eda entries.
+    "eda": CLIENT_SOURCE_DIR / "eda-crucible.py",
 }
 
 # AC1's own words: "Five assertions and the client count asserted" -- six since
-# go joined. The count is a CONSTANT here and is compared against the number of
+# go joined, seven since eda did. The count is a CONSTANT here and is compared against the number of
 # clients each test actually DROVE, so a loop that silently shrank to one
 # client fails -- that is the specific defect AC1 exists to prevent ("the
 # client exposes the verbs" is satisfiable by one client).
-EXPECTED_CLIENT_COUNT = 6
+EXPECTED_CLIENT_COUNT = 7
 
 # The six, spelled as AC1 spells them.
 TIER_VERBS = ("unit", "module", "integration", "e2e", "regression", "bdd")

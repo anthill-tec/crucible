@@ -291,6 +291,10 @@ AGENT = "CR-CRU-111-C3-modality-probe"
 #   arduino  `make junit` in each tier's own place: the native host build
 #            (`tests/native`), a simulator (`tests/sim`), the board
 #            (`tests/hil`) — see ESCALATION 6
+# eda is excluded: it splits no tier by its toolchain. Its tier cell is its
+# declared eda entries, each run by one pytest, which
+# `test_an_eda_tier_runs_each_entry_and_states_its_verdict` proves; its
+# envelope's tier is proved by `test_client_tier_run_envelope`.
 TOOLCHAIN_SPLIT_CELLS = {
     "mvn": ("unit", "integration"),
     "rust": ("unit", "integration"),

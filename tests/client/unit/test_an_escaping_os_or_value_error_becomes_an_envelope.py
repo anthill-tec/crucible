@@ -70,6 +70,7 @@ _PROJECT_DIR_ENV = {
     "mvn": "MVN_CRUCIBLE_PROJECT_DIR",
     "arduino": "ARDUINO_CRUCIBLE_PROJECT_DIR",
     "go": "GO_CRUCIBLE_PROJECT_DIR",
+    "eda": "EDA_CRUCIBLE_PROJECT_DIR",
 }
 
 
@@ -102,8 +103,8 @@ class _EscapingFailureCase(unittest.TestCase):
 
     def setUp(self):
         self.assertEqual(
-            len(CLIENT_FILES), 6,
-            "the fleet census this file drives against has drifted from 6 "
+            len(CLIENT_FILES), 7,
+            "the fleet census this file drives against has drifted from 7 "
             "clients -- update the loop, not just this assertion")
         self._scratch_dirs = []
 

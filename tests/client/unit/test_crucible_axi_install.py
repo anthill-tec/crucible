@@ -72,7 +72,8 @@ This RED slice pins the exact package layout + API GREEN must build:
             {"version": <str>, "clients": {<stack>: <path>, ...},
              "status": <path ending in "STATUS-CONTRACT.md">,
              "config": <path ending in "crucible.toml">}
-            "clients" covers exactly {"bun","python","rust","mvn","arduino","go"}.
+            "clients" covers exactly {"bun","python","rust","mvn","arduino","go",
+            "eda"}.
         write_manifest(target_dir, manifest_dict) -> str
             Writes "crucible-clients.json" (single JSON document, overwriting
             -- never appending) into target_dir; returns the written path.
@@ -108,7 +109,7 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 TOON_PATH = client_script("toon.py")
 STATUS_CONTRACT_PATH = CLIENT_SOURCE_DIR / "STATUS-CONTRACT.md"
 
-EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino", "go"}
+EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino", "go", "eda"}
 
 # The manifest's top-level key set, DECLARED ONCE in `manifest_contract` and
 # imported here rather than restated: three suites pin it, and three copies of
@@ -571,12 +572,12 @@ class DiscoveryManifestTest(unittest.TestCase):
                 f"{stack} path {path!r} does not look like the {stack} client")
 
     def test_build_manifest_omits_stacks_outside_the_five_client_fleet(self):
-        """Negative/bound path -- exactly 5 keys, no extra/unknown stack
-        sneaks in (would fail if a runaway implementation added e.g. a
-        6th/'vscode' entry, since vscode is clientless per the CR context)."""
+        """Negative/bound path -- exactly 7 keys, no extra/unknown stack
+        sneaks in (would fail if a runaway implementation added e.g. an
+        8th/'vscode' entry, since vscode is clientless)."""
         manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
-        self.assertEqual(len(manifest["clients"]), 6)
+        self.assertEqual(len(manifest["clients"]), 7)
 
     def test_build_manifest_carries_a_version_key_and_status_contract_reference(self):
         manifest_mod, = _import_fresh("crucible_axi.manifest")

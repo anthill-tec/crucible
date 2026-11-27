@@ -230,6 +230,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-241](CR-CRU-241-pytest-path-lives-once-in-the-run-module.md) | the python client's pytest path lives once in the shared run module | maintenance | COMPLETED | 196 | 9 (0.5.0) |
 | [CR-CRU-242](CR-CRU-242-an-eda-project-runs-a-pytest-tier-and-files-it.md) | an EDA project runs a pytest tier and files it | feature | COMPLETED | 241 | 9 (0.5.0) |
+| [CR-CRU-243](CR-CRU-243-the-fleet-installs-declares-and-counts-the-eda-client.md) | the fleet installs, declares and counts the eda client | feature | COMPLETED | 242 | 9 (0.5.0) |
 
 ## Deferred — post-0.2.0
 

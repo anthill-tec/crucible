@@ -420,7 +420,7 @@ _TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
 #: entry naming one is another stack's, skipped rather than refused.
 _OTHER_STACKS_FRAMEWORKS = ("nextest", "surefire", "unittest", "pytest",
                             "bun-test", "vitest", "playwright", "playwright-bdd",
-                            "go-test")
+                            "go-test", "eda-pytest")
 #: The stream file `make` is handed in CRUCIBLE_STREAM, in the run's own
 #: reports dir, and how long the relay may take to finish once `make` exited
 #: and once a signal interrupted the run.

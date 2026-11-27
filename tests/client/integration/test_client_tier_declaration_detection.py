@@ -149,6 +149,15 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tests.client.eda_project_harness import (
+    EdaProject,
+    RecordingInterpreter,
+    pytest_selections,
+)
+from tests.client.eda_project_harness import diagnostics as eda_diagnostics
+from tests.client.eda_project_harness import envelope as eda_envelope
+from tests.client.eda_project_harness import said as eda_said
+from tests.client.eda_project_harness import scratch as eda_scratch
 from tests.client.go_client_harness import (
     GoProject,
     go_toolchain_gap,
@@ -207,6 +216,7 @@ DECLARED_CELLS = {
     "rust": "module",
     "arduino": "integration",
     "go": "integration",
+    "eda": "module",
 }
 
 # What counts as a project ARTEFACT named in a refusal (AC14b's second face).
@@ -965,6 +975,40 @@ class GoDeclaredTargetRunsTest(unittest.TestCase):
         self.assertEqual(go_terminal_events(p.held()),
                          [(self.PACKAGE, "TestDeclaredProbe", "pass")],
                          f"exactly the declared test is filed; {where}")
+
+
+class EdaDeclaredTargetRunsTest(unittest.TestCase):
+    """eda -- a tier is declared by an eda entry, `[targets."<tier>"]` with
+    `framework = "eda-pytest"` and its `paths`, in the project's
+    `crucible.toml`. The same cell refuses with no such entry, naming the
+    declaration, and RUNS once the entry the refusal names is declared, with
+    nothing else about the invocation changed. Driven on a scratch copy of
+    the eda fixture project (which declares no `module` entry) through a
+    recording interpreter, against a loopback `RecordingBoard`."""
+
+    def test_a_declared_eda_entry_is_detected_and_run(self):
+        tier = DECLARED_CELLS["eda"]
+        python = RecordingInterpreter(
+            os.path.join(eda_scratch(self, "eda-declared-cell-python-"), "bin", "python"))
+        p = EdaProject(self)
+        refused = p.drive(tier, python=python.path)
+        where = eda_diagnostics(refused)
+        axi = eda_envelope(refused.stdout) or {}
+        self.assertIs(axi.get("ok"), False, where)
+        self.assertIn("tier-run-undeclared", refused.stderr, where)
+        self.assertIn(f'[targets."{tier}"]', eda_said(axi), where)
+        self.assertEqual(python.pytest_calls(), [], f"a refusal runs no pytest; {where}")
+        self.assertEqual(p.run_route_posts(), [], f"a refusal opens no run; {where}")
+
+        # Follow the instruction: declare the entry. Nothing else changes.
+        p.declare(f'[targets."{tier}"]\nframework = "eda-pytest"\npaths = ["tests/unit"]')
+        ran = p.drive(tier, python=python.path)
+        where = eda_diagnostics(ran)
+        starts = [body for path, body in p.posts() if path == "/api/v2/runs/start"]
+        self.assertEqual([(s or {}).get("tier") for s in starts], [tier],
+                         f"one run, filed under the verb's tier; {where}")
+        self.assertEqual(pytest_selections(python.pytest_calls(), p.dir), [["tests/unit"]],
+                         f"the declared entry's paths, and only them, ran; {where}")
 
 
 # ── AC14a: the refusal is REACHABLE-PAST ──────────────────────────────

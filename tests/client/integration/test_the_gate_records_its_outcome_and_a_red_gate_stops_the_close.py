@@ -152,6 +152,13 @@ from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_he
     _write_native_fixture,
 )
 
+#: Every client whose gate, with no suite declared, runs its whole suite as
+#: one run and answers with that run's envelope. eda is excluded: its gate
+#: always runs one suite per declared eda entry and refuses a project that
+#: declares none, so it has no lone whole-suite gate. Its gate's milestone,
+#: passing and failing, is proved by
+#: `test_an_eda_gate_runs_each_entry_as_its_own_suite`, and its `cr-close` by
+#: `test_the_close_judges_each_suite_by_its_latest_gate_result`.
 CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 GATE_TYPE = "pre-merge-gate"

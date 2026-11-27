@@ -84,7 +84,7 @@ GATE_TYPE = "pre-merge-gate"
 CLOSE_VERB = "cr-close"
 ACCEPT_FLAG = "--accept-failing-gate"
 UNUSED_REASON_CODE = "accept-failing-gate-unused"
-CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
+CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go", "eda")
 #: The clients whose surface enumerates no suite declaration at all: a red
 #: suite is never undeclared on them, and they cannot run a scoped gate.
 NO_SUITE_CLIENTS = ("python",)
@@ -505,6 +505,14 @@ class MvnClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
 
 class ArduinoClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
     CLIENT = "arduino"
+
+
+class EdaClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
+    """An eda project declaring a `unit`, an `integration` and an `e2e`
+    entry: its gate's suites are the entries, so a red one is re-run by a
+    gate scoped to it."""
+
+    CLIENT = "eda"
 
 
 class TheSuiteBySuiteVerdictTest(_CloseJudgesSuiteBySuite):

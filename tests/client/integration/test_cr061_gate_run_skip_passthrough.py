@@ -100,6 +100,7 @@ CLIENT_FILES = {
     "python": CLIENTS_DIR / "python-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
     "go": CLIENTS_DIR / "go-crucible.py",
+    "eda": CLIENTS_DIR / "eda-crucible.py",
 }
 
 

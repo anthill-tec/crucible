@@ -23,7 +23,7 @@ then runs that resolved ABSOLUTE Bun path, reported as the stage's `bun` output.
 
 CR-CRU-090 §S1 — the `[fleet]` stage lays the packaged client files down
 under `<target-dir>/clients/`, ordered strictly BEFORE `[manifest]`: the
-manifest publishes six paths anchored on that directory, so it must be written
+manifest publishes seven paths anchored on that directory, so it must be written
 only after they exist. Before this, nothing materialised the directory and
 every published path dangled.
 """
@@ -48,7 +48,7 @@ from crucible_axi import manifest
 SERVER_STAGE_NAME = "server"
 
 # CR-CRU-090 §S1 -- `[fleet]` sits strictly BEFORE `[manifest]`: the manifest
-# publishes six paths anchored on `<target-dir>/clients/`, so it may only be
+# publishes seven paths anchored on `<target-dir>/clients/`, so it may only be
 # written once the files it names actually exist. Before this stage existed,
 # nothing materialised that directory and every published path dangled.
 # CR-CRU-070 §Design -- `[unit]` is LAST: it is the only stage that hands work
@@ -213,10 +213,10 @@ _NO_USER_BUS_REASON = (
 XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
 _DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
 STORE_DIR_NAME = "crucible"
-# The packaged fleet, exactly (CR-CRU-090 §S1). The six stack clients plus:
+# The packaged fleet, exactly. The seven stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
-# which the six load BY FILE PATH from their OWN directory, so a clients-only
-# copy lays down six UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
+# which the seven load BY FILE PATH from their OWN directory, so a clients-only
+# copy lays down seven UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
 # `manifest.build_manifest` publishes as `status`.
 # CR-CRU-138 §S4 — and `crucible.toml`, the distribution's own limit
 # declarations, which belong to this list for exactly the reason `toon.py`
@@ -253,6 +253,7 @@ FLEET_FILES = (
     "mvn-crucible.py",
     "arduino-crucible.py",
     "go-crucible.py",
+    "eda-crucible.py",
     "_crucible_axi.py",
     "_crucible_run.py",
     "_crucible_release.py",
@@ -1297,9 +1298,9 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
 
     The copy is confined to `<target-dir>/clients/` (created when absent) and
     is byte-for-byte, MODE INCLUDED: each landed file carries its source's
-    permission bits, so the three executable clients arrive executable instead
-    of 0o644 under the operator's umask (which would make
-    `<target-dir>/clients/rust-crucible.py` unrunnable directly). Confinement
+    permission bits, so a landed file's mode is its source's mode rather
+    than whatever the operator's umask happens to leave. Every client is
+    packaged 0o644 and is run through an interpreter. Confinement
     is ENFORCED, not merely intended: a SYMLINK sitting at one of the packaged
     destination names is REPLACED by a regular file and never followed, because
     both the read-compare and the write traverse a link and would otherwise
@@ -1357,8 +1358,8 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
             continue
         Path(destination).write_bytes(fresh)
         # The mode is part of the payload: `write_bytes` creates with the
-        # process umask, which strips the executable bit three of the packaged
-        # carry at source. `copymode` also NORMALISES an existing
+        # process umask, which need not match the mode a packaged file
+        # carries at source. `copymode` also NORMALISES an existing
         # destination's mode to the source's, so a `--force` re-copy repairs a
         # mode that drifted out of band.
         shutil.copymode(source, destination)

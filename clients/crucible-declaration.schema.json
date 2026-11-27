@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "description": "Crucible's stack declaration: how each stack declares how its tests run. A plain JSON descriptor, readable with any runtime's standard library; it is not a JSON Schema and no JSON Schema validator reads it. Under each stack: `location` names the file and table its declaration lives in; `entry` describes one declared target (null where the stack reads no target entry); `fields` lists each field with the `values` it may take, its `default` and whether it is `required`. A `values` is a list of the exact values, a {\"pattern\": [...]} of templates in which <NAME> stands for any non-blank name, a {\"board-listed\": \"codecs.<kind>\"} codec name the board must list at run time, or a {\"path\": {\"holds\": \"<file>\"}} directory that must hold that file. `requires` names a field that must be present (true) or must hold one of the listed values; `excludes` names the fields that may not appear beside it; `when` is a rule for one value. An `open` entry accepts fields it does not list; `refused` names the fields it never accepts.",
+  "version": 4,
+  "description": "Crucible's stack declaration: how each stack declares how its tests run. A plain JSON descriptor, readable with any runtime's standard library; it is not a JSON Schema and no JSON Schema validator reads it. Under each stack: `location` names the file and table its declaration lives in; `entry` describes one declared target (null where the stack reads no target entry); `fields` lists each field with the `values` it may take, its `default` and whether it is `required`. A `values` is a list of the exact values, a {\"pattern\": [...]} of templates in which <NAME> stands for any non-blank name, a {\"board-listed\": \"codecs.<kind>\"} codec name the board must list at run time, a {\"path\": {\"holds\": \"<file>\"}} directory that must hold that file, a {\"list\": {\"min\": <n>, \"items\": <values>}} list of at least `min` items each of the `items` form, a {\"path\": {\"exists\": true, \"node_id\": \"::\"}} path, relative to the project dir or absolute, that `exists`, optionally followed by the `node_id` separator and a node id, where the part before it must exist, or a {\"path\": {\"is\": \"executable\"}} path, relative to the project dir or absolute, naming an `executable` file. A `key` may carry `tiers`, the allowed first segment, and `label`: \"non-empty\", meaning the /<label> part, when present, is non-empty. An entry's `frameworkless`: \"skipped\" means the reader skips an entry with no framework; an entry that omits it reads such an entry as rust's. `requires` names a field that must be present (true) or must hold one of the listed values; `excludes` names the fields that may not appear beside it; `when` is a rule for one value. An `open` entry accepts fields it does not list; `refused` names the fields it never accepts.",
   "stacks": {
     "bun": {
       "description": "A bun project declares its targets in package.json under crucible.targets, one entry per script.",
@@ -231,6 +231,55 @@
         },
         "shape": {"file_does_not_parse": "undeclared"}
       }
+    },
+    "eda": {
+      "description": "An eda project declares its pytest targets in crucible.toml, one [targets.\"<tier>[/<label>]\"] entry per run, and may name its interpreter in [eda].",
+      "location": {"file": "crucible.toml", "table": "targets.<key>"},
+      "entry": {
+        "key": {
+          "form": "tier[/label]",
+          "tiers": ["unit", "module", "integration", "e2e", "bdd"],
+          "label": "non-empty",
+          "description": "the tier, optionally followed by / and a non-empty label"
+        },
+        "open": true,
+        "other_stacks": "skipped",
+        "frameworkless": "skipped",
+        "refused": [],
+        "fields": {
+          "framework": {
+            "description": "the eda pytest runner",
+            "values": ["eda-pytest"],
+            "default": null,
+            "required": true
+          },
+          "paths": {
+            "description": "pytest paths or path::node ids relative to the project dir",
+            "values": {"list": {"min": 1, "items": {"path": {"exists": true, "node_id": "::"}}}},
+            "default": null,
+            "required": true
+          }
+        },
+        "shape": {
+          "targets_not_a_table": "undeclared",
+          "entry_not_a_table": "skipped",
+          "file_does_not_parse": "refused"
+        }
+      },
+      "stack_table": {
+        "file": "crucible.toml",
+        "table": "eda",
+        "fields": {
+          "python": {
+            "description": "the interpreter that runs pytest, relative to the project dir",
+            "values": {"path": {"is": "executable"}},
+            "default": null,
+            "required": false,
+            "overridden_by": "--python, then $EDA_CRUCIBLE_PYTHON"
+          }
+        },
+        "shape": {"table_not_a_table": "refused", "file_does_not_parse": "refused"}
+      }
     }
   },
   "reserved_frameworks": {
@@ -239,11 +288,12 @@
     "python": ["pytest", "unittest"],
     "maven": ["surefire"],
     "arduino": ["arduino-native"],
-    "go": ["go-test"]
+    "go": ["go-test"],
+    "eda": ["eda-pytest"]
   },
   "skip_rule": {
-    "description": "crucible.toml [targets.<key>] is one flat namespace: a key holds one stack's entry. The rust, arduino and maven clients skip an entry that names another stack's framework, and refuse nothing in it; the skip is decided on framework before any other field is checked. An entry with no framework is rust's.",
-    "readers": ["rust", "arduino", "maven"],
+    "description": "crucible.toml [targets.<key>] is one flat namespace: a key holds one stack's entry. The rust, arduino, maven and eda clients skip an entry that names another stack's framework, and refuse nothing in it; the skip is decided on framework before any other field is checked. An entry with no framework is rust's, and eda skips it.",
+    "readers": ["rust", "arduino", "maven", "eda"],
     "decided_on": "framework"
   },
   "writer": {

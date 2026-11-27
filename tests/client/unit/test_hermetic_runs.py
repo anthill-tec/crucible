@@ -38,6 +38,7 @@ CLIENT_SCRIPTS = (
     "mvn-crucible.py",
     "arduino-crucible.py",
     "go-crucible.py",
+    "eda-crucible.py",
 )
 
 HERMETIC_VERBS = (
@@ -524,7 +525,7 @@ class ClientHermeticCliAndGateSurfaceTest(_HermeticTestCase):
     `sibling_client_argv` propagation, and Maven `--with-docker --hermetic`
     refusal before Docker starts."""
 
-    def test_all_six_clients_accept_hermetic_on_all_six_tiers_test_and_pre_merge_gate(self):
+    def test_all_seven_clients_accept_hermetic_on_all_six_tiers_test_and_pre_merge_gate(self):
         for script in CLIENT_SCRIPTS:
             parser = _capture_client_parser(script)
             for verb in HERMETIC_VERBS:

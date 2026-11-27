@@ -1,7 +1,7 @@
 """CR-CRU-009 §S2 — the discovery manifest (`crucible-clients.json`).
 
 The manifest is the Model-B pre-flight contract: a stable-schema JSON document
-mapping each of the five client stacks to its installed `*-crucible.py` path,
+mapping each of the seven client stacks to its installed `*-crucible.py` path,
 carrying a version and the STATUS-CONTRACT reference. `write_manifest` OVERWRITES
 (never appends) so re-running install converges on a single document, and
 `run_manifest_stage` reports `converged` when the on-disk JSON already
@@ -25,9 +25,9 @@ import os
 import tomllib
 from pathlib import Path
 
-# The six client stacks that ship a `*-crucible.py` client — exactly these,
+# The seven client stacks that ship a `*-crucible.py` client — exactly these,
 # no extras (a clientless stack such as vscode must NOT appear here).
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go", "eda")
 
 MANIFEST_FILENAME = "crucible-clients.json"
 
@@ -439,7 +439,7 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
 
     Returns a dict with the top-level keys `version`, `clients`, `status`,
     `config`, `shipped_config` and `declaration_schema`, plus `server_config`
-    when the install laid the server's file down. `clients` maps each of the five stacks to its
+    when the install laid the server's file down. `clients` maps each of the seven stacks to its
     installed client path under `install_dir`; `status` references the
     STATUS-CONTRACT; `config` is the operator-editable configuration the
     install laid down (CR-CRU-131 §S1c — a file the installer WRITES belongs

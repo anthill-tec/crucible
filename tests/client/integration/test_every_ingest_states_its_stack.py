@@ -40,9 +40,12 @@ from tests.client.live_run_harness import (
     write_fake_mvnw,
 )
 from tests.client.client_fleet_envelope_census_helpers import (
+    EDA_PROBE_DIR,
     declare_board,
+    declare_eda_entries,
     fake_go_body,
     install_project_limits,
+    write_eda_project,
     write_go_module,
 )
 from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
@@ -59,7 +62,8 @@ INGEST_ROUTES = (RUNS, PARSED, COMPILE)
 
 # Each client's own stack name, as the board will store it.
 CLIENT_STACKS = {"arduino": "arduino", "bun": "bun", "mvn": "mvn",
-                 "python": "python", "rust": "rust", "go": "go"}
+                 "python": "python", "rust": "rust", "go": "go",
+                 "eda": "eda"}
 
 AGENT = "stack-census-probe"
 PROJECT_KEY = "stack-census-project-key"
@@ -939,6 +943,70 @@ class GoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
     def test_a_pre_merge_gate_run_states_the_go_stack_on_its_start_and_its_close(self):
         self.assert_the_run_states_the_go_stack("pre-merge-gate")
+
+
+class EdaStatesItsStackOnEveryIngestTest(_ClientIngestCase):
+    """eda: each running verb (`test`, `regression`, `pre-merge-gate`) opens
+    its run and runs a real pytest over the project's one `unit` entry (this
+    suite's interpreter, named by `[eda] python`), filing its JUnit report on
+    the run it opened: the run start and the ingest each name the eda
+    stack."""
+
+    CLIENT = "eda"
+
+    def setUp(self):
+        super().setUp()
+        write_eda_project(self.project_dir)
+        declare_eda_entries(self.project_dir, ("unit",))
+        self.stderr = ""
+
+    def drive_verb(self, start_reply, verb, *extra):
+        """The whole verb through `main`, its every POST recorded (`_post`,
+        and the transport under it) and its every read answered offline."""
+        recorder = _RecordingPost(start_reply)
+        health = get_answering_health(BOARD_OFFLINE)
+
+        def request(method, path, payload=None, timeout=None):
+            if method == "POST":
+                return recorder(path, payload)
+            return health(path)
+
+        argv = ["eda-crucible.py", verb, "--project-dir", self.project_dir,
+                "--agent", AGENT, *extra]
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(self.module, "_post", side_effect=recorder,
+                                  create=True), \
+                mock.patch.object(self.module, "_request", side_effect=request,
+                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True, side_effect=health), \
+                mock.patch.dict(os.environ), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err), \
+                contextlib.suppress(SystemExit):
+            for key in ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
+                        "EDA_CRUCIBLE_PYTHON", "PYTEST_ADDOPTS"):
+                os.environ.pop(key, None)
+            self.module.main()
+        self.stderr = err.getvalue()
+        return recorder
+
+    def assert_the_run_states_the_eda_stack(self, verb, *extra):
+        recorder = self.drive_verb(START_ACCEPTED, verb, *extra)
+        where = f"posted to {recorder.paths()!r} stderr={self.stderr[-1200:]!r}"
+        self.assertEqual([body.get("stack") for body in recorder.bodies(RUN_START)],
+                         ["eda"], f"eda {verb}: one run start, naming the eda stack; {where}")
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+        self.assertEqual([path for path in recorder.paths() if path in (PARSED, COMPILE)],
+                         [], f"eda {verb} files no other report; {where}")
+
+    def test_a_test_run_states_the_eda_stack_on_its_start_and_its_ingest(self):
+        self.assert_the_run_states_the_eda_stack("test", "--tests", EDA_PROBE_DIR)
+
+    def test_a_regression_run_states_the_eda_stack_on_its_start_and_its_ingest(self):
+        self.assert_the_run_states_the_eda_stack("regression")
+
+    def test_a_pre_merge_gate_run_states_the_eda_stack_on_its_start_and_its_ingest(self):
+        self.assert_the_run_states_the_eda_stack("pre-merge-gate")
 
 
 if __name__ == "__main__":

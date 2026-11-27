@@ -217,12 +217,14 @@ import copy
 import importlib.util
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from tests.client.eda_project_harness import EdaProject
 from tests.client.fake_nextest import held_results
 from tests.client.live_run_harness import (
     START,
@@ -290,7 +292,10 @@ SENTINELS = (UNSTATED, COMPILE_STATEMENT, NOTHING_INGESTED)
 # from one statement of the fact.
 TIER_VERB_DRIVEN = {"bun": "regression", "python": "regression",
                     "mvn": "unit", "rust": "unit", "arduino": "unit",
-                    "go": "integration"}
+                    "go": "integration", "eda": "unit"}
+# eda is excluded here: it has no compile verb, and a run whose pytest writes
+# no report is filed as a compile record from the tier verb itself, which
+# `test_an_eda_run_is_filed_by_how_pytest_exited` proves.
 COMPILE_EXIT_VERB = {"bun": "test", "python": "regression", "mvn": "unit",
                      "rust": "unit", "arduino": "compile", "go": "check"}
 # go's one exit its build-tag tier verb cannot reach: a tier whose files declare
@@ -1072,6 +1077,79 @@ class GoIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._GoModalityCase):
             f"{where}: a compile is not a test run; posted "
             f"{[p for p, _ in drive.calls]!r}")
         self.assertStatesCompileAndNotATestTier(drive, where)
+
+
+class EdaIngestedTierEnvelopeTest(_EnvelopeTierProbe, unittest.TestCase):
+    """eda: the tier verb driven is `unit`, declared by one eda entry over a
+    probe directory of a scratch copy of the eda fixture project, the client
+    spawned (its interpreter this suite's own) against a loopback
+    `RecordingBoard` that answers the ingest with the counts it was sent:
+
+      * success -- the probe holds one passing test;
+      * failing suite -- the probe holds a passing test and a failing one;
+      * nothing ingested -- `module`, which the project does not declare, is
+        refused before anything runs."""
+
+    PROBE = "tests/probe"
+
+    def setUp(self):
+        self.project = EdaProject(self)
+        self.project.declare_only_the_board()
+        self.project.declare(
+            f'[targets."{TIER_VERB_DRIVEN["eda"]}"]\nframework = "eda-pytest"\n'
+            f'paths = ["{self.PROBE}"]')
+
+    def write_probe(self, *outcomes):
+        self.project.write(f"{self.PROBE}/check_probe.py", "".join(
+            f"def test_probe_{index}():\n    assert {outcome == 'pass'}\n\n\n"
+            for index, outcome in enumerate(outcomes)))
+
+    def drive(self, argv, response=None):
+        if response is not None:
+            self.project.board.answer("POST", RUNS, {"ok": True, **response}, times=1)
+        result = self.project.drive(*argv, python=sys.executable, agent=AGENT)
+        return _MODALITY._HARNESS._Drive(result.returncode, result.stdout,
+                                          result.stderr, self.project.posts())
+
+    def envelope(self, drive):
+        decoded = _MODALITY._TOON.decode(drive.out)
+        self.assertIn("axi", decoded,
+                      f"stdout must decode to a TOON envelope; got {drive.out[:600]!r}")
+        return decoded["axi"]
+
+    def assertStatesTheVerbsTier(self, stated, where):
+        self.assertEqual(
+            stated, TIER_VERB_DRIVEN["eda"],
+            f"{where}: the run was filed under the verb's tier, so the "
+            f"envelope states {TIER_VERB_DRIVEN['eda']!r}; it says {stated!r}")
+
+    def test_a_successful_tiered_run_states_the_tier_it_ingested(self):
+        where = "eda unit / success"
+        self.write_probe("pass")
+        drive = self.drive([TIER_VERB_DRIVEN["eda"]],
+                           {"run": {"total": 1, "passed": 1, "failed": 0, "pending": 0}})
+        self.assertEqual(drive.code, 0, f"{where}: exit={drive.code} stderr={drive.err[-800:]!r}")
+        self.assertReachedSuccess(drive, where)
+        stated = self.assertEnvelopeStatesIngestedTier(drive, where)
+        self.assertStatesTheVerbsTier(stated, where)
+
+    def test_a_failing_suite_still_states_the_tier_it_ingested(self):
+        where = "eda unit / failing suite"
+        self.write_probe("pass", "fail")
+        drive = self.drive([TIER_VERB_DRIVEN["eda"]],
+                           {"run": {"total": 2, "passed": 1, "failed": 1, "pending": 0}})
+        self.assertNotEqual(drive.code, 0, f"{where}: a failing tier run exits non-zero")
+        self.assertReachedFailingSuite(drive, where)
+        stated = self.assertEnvelopeStatesIngestedTier(drive, where)
+        self.assertStatesTheVerbsTier(stated, where)
+
+    def test_a_refused_tier_reports_no_ingested_tier(self):
+        where = "eda module / undeclared"
+        self.write_probe("pass")
+        drive = self.drive(["module"])
+        self.assertNotEqual(drive.code, 0, f"{where}: an undeclared tier is refused")
+        self.assertIn("tier-run-undeclared", drive.err, f"{where}: {drive.err[-800:]!r}")
+        self.assertClaimsNothingWasIngested(drive, where)
 
 
 # ── the honest tier-less envelope (ESCALATION 1) ───────────────────────────

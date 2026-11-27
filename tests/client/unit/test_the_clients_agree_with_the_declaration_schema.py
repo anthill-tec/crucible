@@ -20,7 +20,15 @@ check is driven with entries generated from
   - the board-listed codecs are checked against a stub health that lists,
     and one that omits, a sample codec;
   - the stack tables: `[bun] package_dir` (a directory holding
-    `package.json`) and `[python] runner` (with `probe=False`).
+    `package.json`) and `[python] runner` (with `probe=False`);
+  - eda, through the vocabulary that states it (a list of paths, a path that
+    exists with an optional `::<node id>`, an executable file, a key's tiers
+    and label, an entry-level `frameworkless`): every tier in both key forms
+    and every valid `paths` shape is accepted, every refused shape is refused,
+    a frameworkless entry and an entry that is not a table are skipped, every
+    other stack's complete entry is skipped, `[eda] python` names an
+    executable file; and rust, arduino and maven skip a complete eda entry
+    beside their own, refusing nothing in it.
 
 No board is touched. The seams are a temporary project dir holding
 `crucible.toml` or `package.json`, and the clients' own checks, loaded by file
@@ -28,7 +36,8 @@ path: bun `_read_target_entry`, `_declared_target`, `_marked_test_script`,
 `_off_template_target`, `_refuse_old_keys`, `_resolve_package_dir`,
 `_target_board_refusal`; rust `_targets_refusal`; arduino `_declared_key`,
 `_declared_entry`; maven `_declared_entry`, `_check_console_declaration`;
-python `_declared_runner`, `_resolve_runner`.
+python `_declared_runner`, `_resolve_runner`; eda `_read_declaration`,
+`_resolve_python`, `_entry_tiers`.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
@@ -41,11 +50,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from tests.client.client_fleet_envelope_census_helpers import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 from tests.client.declaration_schema_harness import (
     ACCEPTED,
+    FIXTURE_DIR,
+    FIXTURE_EXECUTABLE,
+    FIXTURE_FILE,
+    FIXTURE_NODE,
+    MISSING_PATH,
     READER_KEYS,
     REFUSED,
     SAMPLE_CODEC,
+    SAMPLE_LABEL,
     SKIPPED,
     TARGETS_READERS,
     UNDECLARED,
@@ -61,25 +80,38 @@ from tests.client.declaration_schema_harness import (
     no_python_args,
     other_frameworks,
     reader_verdict,
+    sample_keys,
     sample_values,
     schema_verdict,
+    toml_value,
+    value_ok,
     write_package,
+    write_path_fixture,
+    write_targets_entries,
     write_targets_toml,
     write_toml,
-)
-from tests.client.client_fleet_envelope_census_helpers import (
-    _UNREACHABLE_CRUCIBLE_URL,
-    declare_and_require_board,
+    wrong_keys,
+    wrong_values,
 )
 
 # What a `[targets]` reader's own check answers for an entry it skips: rust
 # reports no refusal (the run goes on undeclared), arduino and maven report the
-# key undeclared.
-SKIP_OUTCOME = {"rust": ACCEPTED, "arduino": UNDECLARED, "maven": UNDECLARED}
+# key undeclared, and eda's declaration holds no entry under the key.
+SKIP_OUTCOME = {"rust": ACCEPTED, "arduino": UNDECLARED, "maven": UNDECLARED,
+                "eda": UNDECLARED}
+
+# The readers that judge the entry under one key, and refuse an entry that is
+# not a table: eda reads every entry of the file at once, and skips one that
+# is not a table (its own tests below).
+PER_KEY_READERS = ("rust", "arduino", "maven")
+
+# The key eda's entry sits under beside another reader's own entry.
+EDA_BESIDE_KEY = f"integration/{SAMPLE_LABEL}"
 
 _CLIENT_ENV = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
                "MVN_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON",
-               "GO_CRUCIBLE_MODULE_DIR", "GO_CRUCIBLE_PROJECT_DIR")
+               "GO_CRUCIBLE_MODULE_DIR", "GO_CRUCIBLE_PROJECT_DIR",
+               "EDA_CRUCIBLE_PROJECT_DIR", "EDA_CRUCIBLE_PYTHON")
 
 
 def _short(value, limit=120):
@@ -98,15 +130,21 @@ class _AgreementCase(unittest.TestCase):
             os.environ.pop(name, None)
 
     def entry_desc(self, stack):
+        self.assertIn(stack, sorted(self.schema.get("stacks", {})),
+                      f"the declaration schema names no {stack} stack")
         return self.schema["stacks"][stack]["entry"]
 
     def assert_verdicts_match(self, stack):
-        """Every generated entry: the client's verdict is the schema's."""
+        """Every generated entry: the client's verdict is the schema's (a
+        schema skip is the reader's skip outcome)."""
         project = new_project(self)
+        skips = self.entry_desc(stack).get("frameworkless") == SKIPPED
         candidates = candidate_entries(self.schema, stack)
         mismatches, verdicts = [], {ACCEPTED: 0, REFUSED: 0}
         for entry in candidates:
             expected = schema_verdict(self.schema, stack, entry)
+            if expected == SKIPPED:
+                expected = SKIP_OUTCOME.get(stack, SKIPPED)
             actual = entry_verdict(stack, project, entry)
             verdicts[actual] = verdicts.get(actual, 0) + 1
             if actual != expected:
@@ -118,7 +156,11 @@ class _AgreementCase(unittest.TestCase):
         # Bound: the cross product exercises both outcomes and nothing else.
         self.assertGreater(verdicts[ACCEPTED], 0)
         self.assertGreater(verdicts[REFUSED], 0)
-        self.assertEqual(set(verdicts), {ACCEPTED, REFUSED})
+        outcomes = {ACCEPTED, REFUSED}
+        if skips:
+            outcomes.add(SKIP_OUTCOME[stack])
+            self.assertGreater(verdicts.get(SKIP_OUTCOME[stack], 0), 0)
+        self.assertEqual(set(verdicts), outcomes)
         return candidates
 
     def assert_every_allowed_value_is_accepted(self, stack, candidates):
@@ -167,6 +209,11 @@ class EveryGeneratedEntryGetsTheSchemasVerdictTest(_AgreementCase):
         candidates = self.assert_verdicts_match("maven")
         self.assert_every_allowed_value_is_accepted("maven", candidates)
         self.assert_refused_fields_and_unlisted_field("maven")
+
+    def test_eda_entries_match_the_schema_through_its_list_and_path_forms(self):
+        candidates = self.assert_verdicts_match("eda")
+        self.assert_every_allowed_value_is_accepted("eda", candidates)
+        self.assert_refused_fields_and_unlisted_field("eda")
 
 
 class EveryStreamTableKeepsAnUnlistedSubfieldTest(_AgreementCase):
@@ -304,6 +351,27 @@ class TheTargetsReadersSkipEveryOtherStacksCompleteEntryTest(_AgreementCase):
     def test_maven_skips_every_other_stacks_complete_entry(self):
         self.assert_skips("maven")
 
+    def test_eda_skips_every_other_stacks_complete_entry(self):
+        self.assert_skips("eda")
+
+    def test_rust_arduino_and_maven_skip_a_complete_eda_entry_beside_their_own(self):
+        project = new_project(self)
+        self.entry_desc("eda")
+        eda_entries = complete_entries(self.schema, "eda", "eda-pytest")
+        self.assertEqual(len(eda_entries),
+                         len(sample_values(self.entry_desc("eda")["fields"]["paths"])))
+        for reader in PER_KEY_READERS:
+            own = complete_entries(self.schema, reader)[0]
+            for eda_entry in eda_entries:
+                with self.subTest(reader=reader, eda_entry=_short(eda_entry)):
+                    write_targets_entries(project, {READER_KEYS[reader]: own,
+                                                    EDA_BESIDE_KEY: eda_entry})
+                    self.assertEqual(schema_verdict(self.schema, reader, eda_entry), SKIPPED)
+                    self.assertEqual(reader_verdict(reader, project, EDA_BESIDE_KEY),
+                                     SKIP_OUTCOME[reader])
+                    self.assertEqual(reader_verdict(reader, project, READER_KEYS[reader]),
+                                     ACCEPTED)
+
     def test_rust_skips_a_complete_maven_entry_carrying_console_rather_than_refusing_it(self):
         project = new_project(self)
         maven_entries = complete_entries(self.schema, "maven", "surefire")
@@ -323,8 +391,9 @@ class TheTargetsReadersSkipEveryOtherStacksCompleteEntryTest(_AgreementCase):
     def test_a_reader_still_refuses_a_framework_no_stack_reserves(self):
         project = new_project(self)
         for reader in TARGETS_READERS:
-            entry = {**complete_entries(self.schema, reader)[0], "framework": "cargo-test"}
             with self.subTest(reader=reader):
+                self.entry_desc(reader)
+                entry = {**complete_entries(self.schema, reader)[0], "framework": "cargo-test"}
                 self.assertEqual(entry_verdict(reader, project, entry), REFUSED)
 
 
@@ -354,6 +423,16 @@ class EachReadersSkipSetIsTheOtherStacksReservedFrameworksTest(_AgreementCase):
 
     def test_mavens_skip_set_is_every_other_owners_reserved_frameworks(self):
         self.assert_skip_set("maven")
+
+    def test_edas_skip_set_is_every_other_owners_reserved_frameworks(self):
+        self.assert_skip_set("eda")
+
+    def test_rust_arduino_and_maven_each_skip_eda_pytest(self):
+        for reader in PER_KEY_READERS:
+            with self.subTest(reader=reader):
+                self.assertIn("eda-pytest", client(reader)._OTHER_STACKS_FRAMEWORKS)
+        self.assertEqual(self.schema.get("reserved_frameworks", {}).get("eda"),
+                         ["eda-pytest"])
 
 
 class AFrameworklessEntryIsRustsTest(_AgreementCase):
@@ -562,8 +641,8 @@ class TheShapeAndParseRulesHoldTest(_AgreementCase):
     def test_a_targets_that_is_not_a_table_is_undeclared(self):
         project = new_project(self)
         for reader in TARGETS_READERS:
-            rule = self.entry_desc(reader)["shape"]["targets_not_a_table"]
             with self.subTest(stack=reader):
+                rule = self.entry_desc(reader)["shape"]["targets_not_a_table"]
                 write_toml(project, 'targets = "not-a-table"\n')
                 expected = ACCEPTED if reader == "rust" else rule
                 self.assertEqual(rule, UNDECLARED)
@@ -576,7 +655,7 @@ class TheShapeAndParseRulesHoldTest(_AgreementCase):
 
     def test_an_entry_that_is_not_a_table_is_refused(self):
         project = new_project(self)
-        for reader in TARGETS_READERS:
+        for reader in PER_KEY_READERS:
             with self.subTest(stack=reader):
                 self.assertEqual(self.entry_desc(reader)["shape"]["entry_not_a_table"], REFUSED)
                 write_targets_toml(project, READER_KEYS[reader], "not-a-table")
@@ -625,7 +704,7 @@ class EachTargetsReadersKeyFormHoldsTest(_AgreementCase):
     def test_an_entry_is_read_under_its_own_key_only(self):
         project = new_project(self)
         others = {"rust": "e2e", "arduino": "tests/native/other", "maven": "unit"}
-        for reader in TARGETS_READERS:
+        for reader in PER_KEY_READERS:
             refused = {**complete_entries(self.schema, reader)[0],
                        self.entry_desc(reader)["refused"][0]: "flag"}
             with self.subTest(stack=reader):
@@ -779,6 +858,205 @@ class TheGoModuleDirAgreesWithTheSchemaTest(_AgreementCase):
         self.assertIsNone(self.schema["stacks"]["go"]["entry"])
         self.assertEqual(self.schema["reserved_frameworks"]["go"], ["go-test"])
         self.assertEqual(self.go.GO_TEST_CODEC, "go-test")
+
+
+class TheEdaEntryAgreesWithTheSchemaTest(_AgreementCase):
+    """eda's `[targets."<tier>[/<label>]"]` entry, driven through the key's
+    tiers and label and the `paths` list form, against the path fixture."""
+
+    def setUp(self):
+        super().setUp()
+        self.eda = client("eda")
+        self.project = new_project(self)
+
+    def eda_entry(self):
+        """eda's first complete valid entry, generated from its descriptor."""
+        self.entry_desc("eda")
+        entries = complete_entries(self.schema, "eda", "eda-pytest")
+        self.assertTrue(entries, "no complete eda entry is generated from the schema")
+        return entries[0]
+
+    def paths_desc(self):
+        return self.entry_desc("eda")["fields"]["paths"]
+
+    def read_entry(self, key, entry):
+        """The one entry eda declares from `entry` under `key`."""
+        write_path_fixture(self.project)
+        write_targets_toml(self.project, key, entry)
+        declared = self.eda._read_declaration(self.project).entries
+        self.assertEqual(len(declared), 1, f"eda declares {declared!r}")
+        return declared[0]
+
+    def refusal(self, key, entry):
+        """The words of the refusal eda raises for `entry` under `key`."""
+        write_path_fixture(self.project)
+        write_targets_toml(self.project, key, entry)
+        with self.assertRaises(declaration_refused("eda")) as caught:
+            self.eda._read_declaration(self.project)
+        return str(caught.exception)
+
+    def test_the_keys_tiers_are_the_tiers_an_eda_entry_may_name(self):
+        key = self.entry_desc("eda")["key"]
+        self.assertEqual(key["form"], "tier[/label]")
+        self.assertEqual(key["tiers"], ["unit", "module", "integration", "e2e", "bdd"])
+        self.assertEqual(key["label"], "non-empty")
+        self.assertEqual(sorted(self.eda._entry_tiers()), sorted(key["tiers"]))
+
+    def test_every_tier_is_accepted_bare_and_with_a_label(self):
+        key_desc = self.entry_desc("eda")["key"]
+        entry = self.eda_entry()
+        keys = sample_keys(key_desc)
+        self.assertEqual(len(keys), 2 * len(key_desc["tiers"]))
+        for key in keys:
+            tier, _slash, label = key.partition("/")
+            with self.subTest(key=key):
+                self.assertEqual(schema_verdict(self.schema, "eda", entry, key), ACCEPTED)
+                declared = self.read_entry(key, entry)
+                self.assertEqual((declared.key, declared.tier, declared.label),
+                                 (key, tier, label or None))
+                self.assertEqual(declared.paths, tuple(entry["paths"]))
+
+    def test_a_tier_it_does_not_list_and_an_empty_label_are_refused_naming_the_key(self):
+        key_desc = self.entry_desc("eda")["key"]
+        entry = self.eda_entry()
+        keys = wrong_keys(key_desc)
+        self.assertIn(f"{key_desc['tiers'][0]}/", keys)
+        for key in keys:
+            with self.subTest(key=key):
+                self.assertEqual(schema_verdict(self.schema, "eda", entry, key), REFUSED)
+                self.assertEqual(entry_verdict("eda", self.project, entry, key), REFUSED)
+                self.assertIn(f'[targets."{key}"]', self.refusal(key, entry))
+
+    def test_every_valid_paths_shape_is_accepted_a_file_a_directory_and_a_node_id(self):
+        samples = sample_values(self.paths_desc())
+        items = {item for sample in samples for item in sample}
+        self.assertEqual(items, {FIXTURE_FILE, FIXTURE_DIR, f"{FIXTURE_FILE}::{FIXTURE_NODE}"})
+        for value in samples:
+            entry = {**self.eda_entry(), "paths": value}
+            with self.subTest(paths=value):
+                self.assertEqual(schema_verdict(self.schema, "eda", entry), ACCEPTED)
+                self.assertEqual(self.read_entry(READER_KEYS["eda"], entry).paths,
+                                 tuple(value))
+
+    def test_a_missing_empty_or_non_list_paths_is_refused_naming_paths(self):
+        base = self.eda_entry()
+        wrong = wrong_values(self.paths_desc())
+        self.assertIn([], wrong)
+        self.assertTrue(any(not isinstance(w, list) for w in wrong))
+        cases = [{k: v for k, v in base.items() if k != "paths"}]
+        cases += [{**base, "paths": w} for w in wrong]
+        for entry in cases:
+            with self.subTest(entry=_short(entry)):
+                self.assertEqual(schema_verdict(self.schema, "eda", entry), REFUSED)
+                self.assertIn("`paths`", self.refusal(READER_KEYS["eda"], entry))
+
+    def test_a_path_that_does_not_exist_is_refused_naming_it(self):
+        base = self.eda_entry()
+        wrong = wrong_values(self.paths_desc())
+        for item in (MISSING_PATH, f"{MISSING_PATH}::{FIXTURE_NODE}"):
+            entry = {**base, "paths": [item]}
+            with self.subTest(item=item):
+                self.assertIn([item], wrong)
+                self.assertFalse(value_ok(self.paths_desc(), [item]))
+                message = self.refusal(READER_KEYS["eda"], entry)
+                self.assertIn(repr(item), message)
+                self.assertIn("does not exist", message)
+
+    def test_a_frameworkless_entry_is_skipped_and_nothing_in_it_refused(self):
+        self.assertEqual(self.entry_desc("eda")["frameworkless"], SKIPPED)
+        base = self.eda_entry()
+        for paths in (base["paths"], [MISSING_PATH], [], "not-a-list"):
+            frameworkless = {"paths": paths}
+            with self.subTest(paths=paths):
+                self.assertEqual(schema_verdict(self.schema, "eda", frameworkless), SKIPPED)
+                write_path_fixture(self.project)
+                write_targets_entries(self.project, {"unit": frameworkless, "e2e": base})
+                self.assertEqual(reader_verdict("eda", self.project, "unit"), UNDECLARED)
+                self.assertEqual(reader_verdict("eda", self.project, "e2e"), ACCEPTED)
+
+    def test_an_entry_that_is_not_a_table_is_skipped(self):
+        shape = self.entry_desc("eda")["shape"]
+        self.assertEqual(shape, {"targets_not_a_table": UNDECLARED,
+                                 "entry_not_a_table": SKIPPED,
+                                 "file_does_not_parse": REFUSED})
+        self.assertEqual(schema_verdict(self.schema, "eda", "not-a-table"), SKIPPED)
+        write_path_fixture(self.project)
+        write_targets_entries(self.project, {"unit": "not-a-table", "e2e": self.eda_entry()})
+        self.assertEqual(reader_verdict("eda", self.project, "unit"), UNDECLARED)
+        self.assertEqual(reader_verdict("eda", self.project, "e2e"), ACCEPTED)
+
+
+class TheEdaPythonTableAgreesWithTheSchemaTest(_AgreementCase):
+    """`[eda] python`: a path relative to the project dir naming an executable
+    file, overridden by `--python`, then `$EDA_CRUCIBLE_PYTHON`."""
+
+    def setUp(self):
+        super().setUp()
+        self.eda = client("eda")
+        self.project = new_project(self)
+
+    def table(self):
+        self.entry_desc("eda")
+        return self.schema["stacks"]["eda"]["stack_table"]
+
+    def declaration(self, text):
+        write_path_fixture(self.project)
+        write_toml(self.project, text)
+        return self.eda._read_declaration(self.project)
+
+    def refusal(self, text):
+        with self.assertRaises(declaration_refused("eda")) as caught:
+            self.declaration(text)
+        return str(caught.exception)
+
+    def test_each_generated_python_gets_the_schemas_verdict(self):
+        python = self.table()["fields"]["python"]
+        self.assertEqual(sample_values(python), [FIXTURE_EXECUTABLE])
+        for value in sample_values(python):
+            with self.subTest(accepted=value):
+                self.assertTrue(value_ok(python, value))
+                declared = self.declaration(f"[eda]\npython = {toml_value(value)}\n")
+                self.assertEqual(declared.python, os.path.join(self.project, str(value)))
+        wrong = wrong_values(python)
+        self.assertIn(FIXTURE_FILE, wrong)
+        for value in wrong:
+            with self.subTest(refused=value):
+                self.assertFalse(value_ok(python, value))
+                message = self.refusal(f"[eda]\npython = {toml_value(value)}\n")
+                self.assertIn("[eda] `python`", message)
+
+    def test_an_eda_that_is_not_a_table_is_refused(self):
+        self.assertEqual(self.table()["shape"]["table_not_a_table"], REFUSED)
+        message = self.refusal('eda = "not-a-table"\n')
+        self.assertIn("[eda]", message)
+        self.assertIn("is not a table", message)
+
+    def test_a_crucible_toml_that_does_not_parse_is_refused(self):
+        self.assertEqual(self.table()["shape"]["file_does_not_parse"], REFUSED)
+        self.assertIn("does not parse", self.refusal(UNPARSEABLE_TOML))
+
+    def test_no_python_declares_the_schemas_default(self):
+        default = self.table()["fields"]["python"]["default"]
+        self.assertIsNone(default)
+        for text in ("", "[eda]\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.declaration(text).python, default)
+
+    def test_the_python_flag_then_the_variable_override_the_declared_python(self):
+        python = self.table()["fields"]["python"]
+        self.assertEqual(python["overridden_by"], "--python, then $EDA_CRUCIBLE_PYTHON")
+        declaration = self.declaration(f'[eda]\npython = "{FIXTURE_EXECUTABLE}"\n')
+        declared = os.path.join(self.project, FIXTURE_EXECUTABLE)
+        flag = os.path.join(self.project, "flag", "python")
+        variable = os.path.join(self.project, "variable", "python")
+        resolve = self.eda._resolve_python
+        self.assertEqual(resolve(SimpleNamespace(python=None), self.project, declaration),
+                         declared)
+        os.environ["EDA_CRUCIBLE_PYTHON"] = variable
+        self.assertEqual(resolve(SimpleNamespace(python=None), self.project, declaration),
+                         variable)
+        self.assertEqual(resolve(SimpleNamespace(python=flag), self.project, declaration),
+                         flag)
 
 
 if __name__ == "__main__":

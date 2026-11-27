@@ -478,6 +478,10 @@ class _SharedParsingCases(_UnitCheckDrive):
                          f"path; {why}")
 
 
+# One case per client whose gate runs a unit-check stage. eda is excluded: its
+# gate has no unit-check stage yet.
+
+
 # ── python ──────────────────────────────────────────────────────────────────
 
 class PythonGateRunsItsDeclaredUnitCheckTest(_SharedParsingCases,
