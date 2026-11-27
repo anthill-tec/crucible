@@ -457,6 +457,118 @@ describe("the junit codec decodes by the framework it is told, never by a stack"
   });
 });
 
+// ── An eda-pytest run reads as a pytest run ──────────────────────────────────
+
+/** An eda project's pytest report: one suite named `pytest`, its cases in two classes. */
+const EDA_TWO_CLASSES = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<testsuites name="pytest tests">',
+  '<testsuite name="pytest" errors="0" failures="1" skipped="1" tests="4" time="0.040" hostname="h">',
+  '<testcase classname="tests.unit.test_netlist.TestNetlist" name="test_nets_resolve" time="0.010"/>',
+  '<testcase classname="tests.unit.test_perf.TestPerf" name="test_timing_closes" time="0.020"><failure message="assert 12.5 &lt;= 10.0">def test_timing_closes():\n&gt;   assert 12.5 &lt;= 10.0</failure></testcase>',
+  '<testcase classname="tests.unit.test_netlist.TestNetlist" name="test_no_floating_pins" time="0.005"/>',
+  '<testcase classname="tests.unit.test_perf.TestPerf" name="test_on_board" time="0.005"><skipped type="pytest.skip" message="board not attached">skipped</skipped></testcase>',
+  "</testsuite>",
+  "</testsuites>",
+].join("\n");
+
+const EDA_TWO_CLASSES_GROUPED: Array<[string, string[]]> = [
+  ["tests.unit.test_netlist.TestNetlist", ["test_nets_resolve", "test_no_floating_pins"]],
+  ["tests.unit.test_perf.TestPerf", ["test_timing_closes", "test_on_board"]],
+];
+
+const EDA_TWO_CLASSES_BY_SUITE: Array<[string, string[]]> = [
+  ["pytest", ["test_nets_resolve", "test_timing_closes", "test_no_floating_pins", "test_on_board"]],
+];
+
+const EDA_TWO_CLASSES_SUMMARY = { total: 4, passed: 2, failed: 1, pending: 1, duration_ms: 40 };
+
+/**
+ * An eda project's pytest report holding a module-level collection error: pytest
+ * reports the module that failed to import as one erroring case with an empty
+ * classname, beside the cases of a module that collected.
+ */
+const EDA_COLLECTION_ERROR = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<testsuites name="pytest tests">',
+  '<testsuite name="pytest" errors="1" failures="0" skipped="0" tests="2" time="0.030" hostname="h">',
+  '<testcase classname="" name="tests.unit.test_broken" time="0.000"><error message="collection failure">ImportError while importing test module tests/unit/test_broken.py</error></testcase>',
+  '<testcase classname="tests.unit.test_netlist.TestNetlist" name="test_nets_resolve" time="0.010"/>',
+  "</testsuite>",
+  "</testsuites>",
+].join("\n");
+
+const EDA_COLLECTION_ERROR_GROUPED: Array<[string, string[]]> = [
+  ["pytest", ["tests.unit.test_broken"]],
+  ["tests.unit.test_netlist.TestNetlist", ["test_nets_resolve"]],
+];
+
+describe("the junit codec groups an eda-pytest run by class, as it does a pytest run", () => {
+  const junit = codecs.get("junit")!;
+
+  test("an eda-pytest report whose one suite is pytest, its cases in two classes, decodes into the two class groups", async () => {
+    const decoded = await junit.parse(EDA_TWO_CLASSES, options({ framework: "eda-pytest" }));
+    expect(decodedShape(decoded.tree)).toEqual(EDA_TWO_CLASSES_GROUPED);
+    expect(decoded.tree.map((s) => s.status)).toEqual(["pass", "fail"]);
+    expect(decoded.summary).toEqual(EDA_TWO_CLASSES_SUMMARY);
+  });
+
+  test("an eda-pytest report decodes into the very tree, summary and files the same report gives under pytest", async () => {
+    const asEda = await junit.parse(EDA_TWO_CLASSES, options({ framework: "eda-pytest" }));
+    const asPytest = await junit.parse(EDA_TWO_CLASSES, options({ framework: "pytest" }));
+    expect(decodedShape(asPytest.tree)).toEqual(EDA_TWO_CLASSES_GROUPED);
+    expect(asEda).toEqual(asPytest);
+  });
+
+  test("an eda-pytest report's failing case keeps its failure message and trace inside its class group", async () => {
+    const decoded = await junit.parse(EDA_TWO_CLASSES, options({ framework: "eda-pytest" }));
+    const perf = decoded.tree.find((s) => s.name === "tests.unit.test_perf.TestPerf");
+    expect(perf?.children.map((c) => [c.name, c.status])).toEqual([
+      ["test_timing_closes", "fail"],
+      ["test_on_board", "pending"],
+    ]);
+    expect(perf?.children[0]?.failure?.message).toBe("assert 12.5 <= 10.0");
+    expect(perf?.children[0]?.failure?.trace).toBe("def test_timing_closes():\n>   assert 12.5 <= 10.0");
+  });
+
+  test("an eda-pytest report's module-level collection error, its classname empty, joins the node pytest as it does under pytest", async () => {
+    const asEda = await junit.parse(EDA_COLLECTION_ERROR, options({ framework: "eda-pytest" }));
+    expect(decodedShape(asEda.tree)).toEqual(EDA_COLLECTION_ERROR_GROUPED);
+    expect(asEda.tree.map((s) => s.status)).toEqual(["fail", "pass"]);
+    expect(asEda.tree[0]?.children[0]?.failure?.message).toBe("collection failure");
+    expect(asEda.summary).toEqual({ total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 10 });
+    const asPytest = await junit.parse(EDA_COLLECTION_ERROR, options({ framework: "pytest" }));
+    expect(asEda).toEqual(asPytest);
+  });
+
+  test("an eda-pytest report whose pytest suite is not its only suite stays grouped by suite, as under pytest", async () => {
+    const asEda = await junit.parse(TWO_SUITES, options({ framework: "eda-pytest" }));
+    const asPytest = await junit.parse(TWO_SUITES, options({ framework: "pytest" }));
+    expect(decodedShape(asEda.tree)).toEqual([
+      ["pytest", ["x1", "y1"]],
+      ["other", ["z1"]],
+    ]);
+    expect(asEda).toEqual(asPytest);
+  });
+
+  /** Every framework other than pytest and eda-pytest, and none: the report keeps its one-suite tree. */
+  const NOT_GROUPED: Array<[string, Record<string, string>]> = [
+    ["no framework", {}],
+    ["framework vitest", { framework: "vitest" }],
+    ["framework junit", { framework: "junit" }],
+    ["framework unittest", { framework: "unittest" }],
+    ["framework bun-test", { framework: "bun-test" }],
+    ["stack eda and no framework", { stack: "eda" }],
+  ];
+  for (const [label, stated] of NOT_GROUPED) {
+    test(`the same eda report under ${label} is not grouped: its one pytest suite is its one node`, async () => {
+      const decoded = await junit.parse(EDA_TWO_CLASSES, options(stated));
+      expect(decodedShape(decoded.tree)).toEqual(EDA_TWO_CLASSES_BY_SUITE);
+      expect(decoded.summary).toEqual(EDA_TWO_CLASSES_SUMMARY);
+    });
+  }
+});
+
 // ── Nothing under src/codecs/ reads the stack ───────────────────────────────
 
 /**

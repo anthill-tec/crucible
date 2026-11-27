@@ -268,8 +268,9 @@ function collectRawOutput(el: XmlElement, out: string[]): void {
 
 /**
  * One JUnit reading for every stack: a node per suite holding testcases, the
- * distinct files its cases name, and — when `framework` is `pytest` and the
- * report's only suite is named `pytest` — its cases grouped by classname.
+ * distinct files its cases name, and — when `framework` is `pytest` or
+ * `eda-pytest` and the report's only suite is named `pytest` — its cases
+ * grouped by classname.
  */
 export function parseJunit(xml: string, framework?: string): DecodedRun {
   const root = parseXml(xml);
@@ -290,7 +291,9 @@ export function parseJunit(xml: string, framework?: string): DecodedRun {
     const suiteName = nameOf(holder);
     for (const testcase of casesOf(holder)) files.add(fileOf(testcase, suiteName));
   }
-  const isPytest = framework === "pytest" && suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
+  const isPytest =
+    (framework === "pytest" || framework === "eda-pytest") &&
+    suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
   const tree = isPytest
     ? groupByClassname(holders.flatMap(casesOf))
     : holders.map((holder) => toNode(nameOf(holder), casesOf(holder)));

@@ -1,0 +1,18 @@
+# The eda fixture project's declaration: one entry per run, each a
+# `[targets."<tier>"]` or `[targets."<tier>/<label>"]` table whose framework is
+# "eda-pytest" and whose `paths` are relative to this directory.
+#
+# It names no board and no project key: a test writes the `[client]` table of
+# its own stub board into its scratch copy, and the `.env` it needs beside it.
+
+[targets."unit"]
+framework = "eda-pytest"
+paths = ["tests/unit"]
+
+[targets."integration/net"]
+framework = "eda-pytest"
+paths = ["tests/integ"]
+
+[targets."e2e"]
+framework = "eda-pytest"
+paths = ["tests/bench"]

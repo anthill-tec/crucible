@@ -1,0 +1,7 @@
+# The fixture's eda SUB-PROJECT: its own declaration, read when the client's
+# project dir is this directory. It names no board and holds no `.env`: a
+# test writes both into its scratch copy as the case needs.
+
+[targets."unit/pcb"]
+framework = "eda-pytest"
+paths = ["tests/pcb"]

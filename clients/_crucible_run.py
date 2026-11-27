@@ -455,6 +455,11 @@ def run_may_be_filed_warning(run_id, error):
     }
 
 
+#: The reason a run a signal interrupted is aborted with, its `{signame}`
+#: the signal's name (`SIGTERM`).
+SIGNAL_ABORT_REASON = "{signame} interrupted the wrapped run"
+
+
 def run_abort_path(run_id):
     """`RUN_ABORT_PATH` for ONE run."""
     return RUN_ABORT_PATH.format(run_id=urllib.parse.quote(str(run_id), safe=""))
@@ -1283,7 +1288,7 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
     if run_id is not None:
         signame = signal.Signals(abandoned.signum).name
         closing = abort_run(post_fn, project_key, agent_id, run_id,
-                            f"{signame} interrupted the wrapped run")
+                            SIGNAL_ABORT_REASON.format(signame=signame))
     return _emit_abandoned(verb, _core.axi_context(project_key, agent_id=agent_id),
                            run_id, abandoned.signum, warnings, closing)
 
@@ -2191,6 +2196,32 @@ def pytest_reports_passing_subtest(line):
     return _PYTEST_SUBTESTS_PASSED.search(line) is not None
 
 
+class PytestSubtestWatch:
+    """Watches a pytest run's output for a passing subtest, which pytest's
+    JUnit report leaves uncounted, passing every line on to the run's
+    narrator (if any). What it saw rides every envelope the run produces as
+    one `subtests-uncounted` warning."""
+
+    def __init__(self, narrator=None):
+        self._narrator = narrator
+        self._watching = True
+
+    def observe(self, line):
+        """Feed one line of pytest's output."""
+        if self._watching and pytest_reports_passing_subtest(line):
+            self._watching = False
+        if self._narrator is not None:
+            self._narrator.observe(line)
+
+    def warnings(self):
+        """`[{code: subtests-uncounted, detail}]` once a passing subtest was
+        seen, else `[]`."""
+        if self._watching:
+            return []
+        return [{"code": "subtests-uncounted",
+                 "detail": PYTEST_SUBTESTS_UNCOUNTED_DETAIL}]
+
+
 #: pytest's exit codes for a run it could not carry out as a runner: an
 #: internal error (3) and a usage error (4: a node id it cannot find, a
 #: conftest it cannot load). Whatever JUnit it wrote then is no test result.
@@ -2228,13 +2259,16 @@ def pytest_probe_timeout():
     return PYTEST_PROBE_TIMEOUT_S
 
 
-def pytest_importable(python, cwd):
+def pytest_importable(python, cwd, env=None):
     """Whether `python` can import pytest, probed in `cwd`: True when it
     imports, False when it cannot or the interpreter cannot be started, and
-    None when the probe does not answer within `PYTEST_PROBE_TIMEOUT_S`."""
+    None when the probe does not answer within `PYTEST_PROBE_TIMEOUT_S`.
+
+    With `env` (even an empty one) the probe's child runs in exactly that
+    environment; without it the child inherits this process's."""
     try:
         probe = subprocess.run([python, "-c", "import pytest"],
-                               cwd=cwd, capture_output=True, text=True,
+                               cwd=cwd, env=env, capture_output=True, text=True,
                                check=False, timeout=PYTEST_PROBE_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return None
@@ -2258,6 +2292,31 @@ def produced_junit(reports_dir):
     """Whether `reports_dir` exists and holds at least one JUnit report."""
     return os.path.isdir(reports_dir) and any(
         _is_junit_report(e) for e in os.listdir(reports_dir))
+
+
+#: The outcomes of a finished pytest run (`pytest_run_outcome`): its JUnit is
+#: filed, it ran nothing, or it left no result to file.
+PYTEST_OUTCOME_FILE = "file"
+PYTEST_OUTCOME_RAN_NOTHING = "ran-nothing"
+PYTEST_OUTCOME_NO_RESULT = "no-result"
+
+
+def pytest_run_outcome(returncode, reports_dir):
+    """What a client does with a finished pytest run, read from its exit and
+    the JUnit reports in `reports_dir`; each client files it its own way.
+
+    `PYTEST_OUTCOME_NO_RESULT` when pytest failed as a runner (whatever JUnit
+    it left) or left no JUnit report; `PYTEST_OUTCOME_RAN_NOTHING` when its
+    report holds no test case, `ran_nothing` says so and no hermetic leak is
+    pending; otherwise `PYTEST_OUTCOME_FILE`. A pending leak is only read
+    here, never taken: the filing that carries it takes it."""
+    if pytest_failed_as_runner(returncode) or not produced_junit(reports_dir):
+        return PYTEST_OUTCOME_NO_RESULT
+    if (not _core.pending_hermetic_run_leaks()
+            and ran_nothing(returncode,
+                            junit_testcase_count(junit_report_paths(reports_dir)))):
+        return PYTEST_OUTCOME_RAN_NOTHING
+    return PYTEST_OUTCOME_FILE
 
 
 def wipe_junit_reports(reports_dir):
