@@ -22,6 +22,20 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Added
 
+- **An electronics project runs its pytest gates through its own client.** The new `clients/eda-crucible.py`
+  (stack `eda`) runs each `[targets."<tier>"]` or `[targets."<tier>/<label>"]` entry with
+  `framework = "eda-pytest"` as its own pytest run, in the project's own interpreter (`--python`, then
+  `$EDA_CRUCIBLE_PYTHON`, then `[eda] python`, then `<project-dir>/.venv/bin/python`; the client's own interpreter is
+  never used). The key comes from `<project-dir>/.env` only, so a sub-project such as `hardware/` reports under its
+  own key. Every pytest child runs headless (`QT_QPA_PLATFORM=offscreen`, no `DISPLAY` or `WAYLAND_DISPLAY`).
+  Each run's envelope carries a `verdict` (`pass`, `fail` or `skip`), and a tier verb's one envelope lists its
+  `entries[]`, a `tier-skipped` warning for an entry whose tests were all skipped, and `skipped[]` with each
+  skipped test's node id and reason (20 listed, the rest counted in `skippedNotListed`). The tier verbs,
+  `test`, `regression` and `pre-merge-gate` take `--hermetic`; the gate runs each entry as its own suite, with
+  `e2e` entries excluded. The board groups an `eda-pytest` run's cases by class, as it does a pytest run. The
+  shared run module now holds the outcome of a finished pytest run (`pytest_run_outcome`), the passing-subtest
+  watch (`PytestSubtestWatch`) and a headless-capable probe (`pytest_importable(..., env=)`); the python client
+  uses them, with its behaviour unchanged. Installing the client and naming it in the schema is still to come.
 - **A gate runs the project's declared unit check.** A project may declare a `[unit-check]` table in its
   `crucible.toml` (`command`, a non-empty list of non-empty strings, and an optional `name`). Every client's
   `pre-merge-gate` runs it right after its lint stage, in lint's directory, with the gate's environment

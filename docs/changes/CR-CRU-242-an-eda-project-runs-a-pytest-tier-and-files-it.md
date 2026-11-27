@@ -1,6 +1,6 @@
 # CR-CRU-242 — an EDA project runs a pytest tier and files it
 
-**Status:** PENDING · revised after gap analysis and user rulings (2026-11-27)
+**Status:** COMPLETED (shipped 2026-11-27 on develop)
 **Type:** feature
 **Priority:** high. P1's first hardware CR (CR-PFC-010) and Model B's CR-MDB-102 wait on it.
 **Depends on:** CR-CRU-241
@@ -359,3 +359,41 @@ pytest path from CR-CRU-241. The new parts are:
 - The `crucible-report-eda` skill, which is Model B's.
 - P1's own files.
 - The Build step, which files nothing.
+
+## Close-out (2026-11-27)
+
+Plan 281.
+
+- **Gap analysis:** the §S7 suites were green at 155/0 and the queue-seq suite at 10/0 before any change. A
+  read-only fact pass found thirteen spec defects. The user ruled:
+  - lift the outcome routing and the subtest watch first (§S0);
+  - `--hermetic`, wall-vs-CPU and `subtests-uncounted` in scope, `lint` later;
+  - the board groups `eda-pytest` by class (§S8);
+  - the rest as recommended.
+
+  Points went from 8 to 13.
+- **Cycle 1043 (§S0):** RED 31 tests. The first GREEN agent died in a machine crash; its uncommitted work was kept
+  and finished by a fresh agent (the user's ruling): `pytest_run_outcome`, `PytestSubtestWatch`,
+  `pytest_importable(env=)` and `DeclaredTierSurface.labelled`, with python switched over byte for byte.
+- **Cycle 1044 (§S1–§S3):** RED 38 tests and the `eda-project` fixture; GREEN added `clients/eda-crucible.py`.
+- **Cycle 1045 (§S4, §S5):** RED 46 tests; GREEN ran each entry through the shared pytest path. Two test defects
+  (a collection error's empty classname, a node id dropped when a directory covers it) were fixed by a RED fix.
+- **Cycle 1046 (§S6, invariants, §S7):** RED 36 results; GREEN composed the gate through `gate_regression`, with a
+  typed no-entry stop that records nothing, and the wall-vs-CPU warning. The fleet census counts seven clients.
+- **Cycle 1047 (§S8):** the JUnit codec groups `eda-pytest` by class (one condition), pinned by 11 tests.
+- **Cycle 1048, VERIFY:** PASS, with no must-fix finding.
+- **Cycle 1049, FIX (user-chosen notes):**
+  - the skip-line parser reads node ids with spaces;
+  - `pending` vs `skipped[]` is pinned (module-level skips and xfails count in `pending` but are not listed);
+  - a filed answer without counts is `fail`;
+  - `_NoEdaEntry` builds its words once;
+  - a shared `SIGNAL_ABORT_REASON`.
+- **Pre-merge gate (cycle 1049):** 13,980 passed and 0 failed in 25m11s. By suite: bun 5,181, python unit 2,833,
+  python integration 5,966.
+- **Carried to CR-CRU-243:**
+  - install the client and add `eda-pytest` to the schema and to the other clients' skip sets;
+  - the help-text census;
+  - document the environment variables, the sub-project, the tier mapping, `pending` vs `skipped[]`, and the
+    `PYTEST_ADDOPTS=-q` risk.
+- **Noted for later:** a third copy of the abort reason in `_abort_gated_run` (`_crucible_axi.py`); a `detail=` and
+  `help=` keyword on `TierRunUndeclared`.
