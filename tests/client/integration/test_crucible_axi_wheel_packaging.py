@@ -22,8 +22,8 @@ Contract pinned here:
        exactly one `.whl`.
     2. The wheel carries the full client fleet under `crucible_axi/clients/`:
        `_crucible_axi.py`, `_crucible_run.py`, `toon.py`,
-       `STATUS-CONTRACT.md`, and all five
-       `{arduino,bun,mvn,python,rust}-crucible.py`.
+       `STATUS-CONTRACT.md`, and all seven
+       `{arduino,bun,eda,go,mvn,python,rust}-crucible.py`.
     3. The wheel carries NO `skills/` entry -- CR-CRU-042 retired the
        `[skills]` installer stage and deleted `clients/skills/`; the
        packaging must not resurrect it.
@@ -80,6 +80,7 @@ EXPECTED_CLIENT_PAYLOAD = (
     "crucible_axi/clients/STATUS-CONTRACT.md",
     "crucible_axi/clients/arduino-crucible.py",
     "crucible_axi/clients/go-crucible.py",
+    "crucible_axi/clients/eda-crucible.py",
     "crucible_axi/clients/bun-crucible.py",
     "crucible_axi/clients/mvn-crucible.py",
     "crucible_axi/clients/python-crucible.py",

@@ -71,7 +71,7 @@ from tests.client import install_clients_candidates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# §S1 -- the packaged fleet, exactly. Five clients plus the shared modules
+# §S1 -- the packaged fleet, exactly. Seven clients plus the shared modules
 # they load BY FILE PATH from their own directory plus the status contract the
 # manifest publishes as `status` plus (CR-CRU-138 §S4) the distribution's own
 # limit declarations, which travel as package data beside the module that
@@ -83,6 +83,7 @@ EXPECTED_FLEET_FILES = frozenset({
     "mvn-crucible.py",
     "arduino-crucible.py",
     "go-crucible.py",
+    "eda-crucible.py",
     "_crucible_axi.py",
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports.
@@ -131,7 +132,7 @@ def _landed_fleet_listing(clients_dir):
             listing.add(Path(relative).as_posix())
     return listing
 
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go", "eda")
 
 FLEET_STAGE_NAME = "fleet"
 MANIFEST_STAGE_NAME = "manifest"
@@ -450,14 +451,14 @@ class CliMainInstallManifestResolvesTest(_CliInstallCase):
         clients = document.get("clients", {})
         self.assertEqual(
             set(CLIENT_STACKS), set(clients),
-            f"AC3/AC8 -- the manifest must publish all five stacks; "
+            f"AC3/AC8 -- the manifest must publish all seven stacks; "
             f"got {sorted(clients)}. envelope:\n{stdout}")
         published = [clients[stack] for stack in CLIENT_STACKS]
         published.append(document.get("status"))
         self.assertEqual(
             len(CLIENT_STACKS) + 1, len(published),
             f"AC3/AC8 -- {len(CLIENT_STACKS) + 1} published paths expected "
-            f"(six clients + status); got {published!r}. envelope:\n{stdout}")
+            f"(seven clients + status); got {published!r}. envelope:\n{stdout}")
         anchor = self.clients_dir() + os.sep
         for path in published:
             self.assertTrue(
@@ -484,6 +485,32 @@ class CliMainInstallManifestResolvesTest(_CliInstallCase):
                 os.access(path, os.R_OK),
                 f"AC3/AC8 -- published path {path!r} is not readable. "
                 f"envelope:\n{stdout}")
+
+    def test_cli_main_install_names_the_eda_client_it_lays_down_byte_for_byte(self):
+        """The eda client, through the entry point: the manifest's
+        `clients.eda` names `<target-dir>/clients/eda-crucible.py`, and the
+        file at that path is byte-identical to the packaged source."""
+        code, stdout = self.run_cli_install()
+        self.assertCliOk(code, stdout)
+        document = json.loads(
+            Path(self.manifest_path()).read_text(encoding="utf-8"))
+        clients = document.get("clients", {})
+        expected = os.path.join(self.clients_dir(), "eda-crucible.py")
+        self.assertEqual(
+            expected, clients.get("eda"),
+            f"`crucible-clients.json` must name the eda client at {expected!r} "
+            f"under `clients.eda`; got clients={clients!r}. "
+            f"envelope:\n{stdout}")
+        landed = Path(expected)
+        self.assertTrue(
+            landed.is_file(),
+            f"the install must lay `eda-crucible.py` down at {landed}. "
+            f"envelope:\n{stdout}")
+        source = Path(self.source_clients_dir()) / "eda-crucible.py"
+        self.assertEqual(
+            source.read_bytes(), landed.read_bytes(),
+            f"the landed eda client must be byte-identical to {source}. "
+            f"envelope:\n{stdout}")
 
 
 class CliMainInstallEnvelopeOrderTest(_CliInstallCase):

@@ -30,7 +30,7 @@ Three guarantees, in order:
        `uv run <installed python-crucible.py> --help` both exit 0 with
        non-empty help output, proving the mechanism is not bun-specific.
     2. PEP 723 SURVIVAL -- the wheel/install pipeline must not strip the
-       `# /// script` block off any of the five installed clients; each
+       `# /// script` block off any of the seven installed clients; each
        still declares `requires-python = ">=3.14"` and an EMPTY
        `dependencies = []` (the §S2/§S3 stub-landmine guard).
     3. NEGATIVE CONTROL -- a copy of an installed client with its PEP 723
@@ -60,6 +60,7 @@ Fallback:
     .venv/bin/python -m unittest tests.client.integration.test_cr046_uv_env_gate
 """
 
+import json
 import os
 import re
 import shutil
@@ -75,9 +76,21 @@ from tests.client.cr046_uv_env_gate_helpers import REPO_ROOT, _sanitized_env, _u
 
 UV_BINARY = shutil.which("uv")
 
-# The six client stacks that ship a `*-crucible.py` client, matching
+# The seven client stacks that ship a `*-crucible.py` client, matching
 # `crucible_axi/manifest.py`'s `CLIENT_STACKS` tuple exactly.
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go", "eda")
+
+# Drives the INSTALLED package's own `[fleet]` and `[manifest]` stage runners
+# against a scratch target given as argv[1]. Only those two stages run: the
+# `[server]` and `[unit]` stages provision globally and are never driven here.
+_INSTALLED_FLEET_AND_MANIFEST_PROBE = """\
+import sys
+from crucible_axi import install, manifest
+
+target = sys.argv[1]
+install.run_fleet_stage(target)
+manifest.run_manifest_stage(target)
+"""
 
 BUILD_TIMEOUT_SECONDS = 600
 UV_TIMEOUT_SECONDS = 120
@@ -279,7 +292,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
 
     def test_installed_clients_carry_intact_pep723_block(self):
         """The wheel + `uv pip install` pipeline must not strip or corrupt
-        any of the five clients' `# /// script` blocks: each installed copy
+        any of the seven clients' `# /// script` blocks: each installed copy
         must still declare `requires-python = ">=3.14"` and an EMPTY
         `dependencies = []` (the §S2/§S3 stub-landmine guard, re-asserted
         here against the INSTALLED artifact rather than the source
@@ -304,6 +317,49 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
             offenders, {},
             f"installed clients with a broken/missing PEP 723 block: "
             f"{offenders}")
+
+    def test_the_installed_package_lays_the_eda_client_down_and_names_it(self):
+        """The wheel's own installer, run from the scratch venv: its
+        `[fleet]` stage lays `eda-crucible.py` down under
+        `<target>/clients/` byte-identical to the checkout's copy, and its
+        `[manifest]` stage writes `crucible-clients.json` with `clients.eda`
+        naming that file."""
+        self._require_installed_clients_dir()
+        venv_python = self.venv_python
+        if venv_python is None:
+            self.fail("the scratch venv has no interpreter to run the install")
+        target = tempfile.mkdtemp(prefix="cr046-install-target-",
+                                  dir=self.tmp_root)
+        self.addCleanup(shutil.rmtree, target, ignore_errors=True)
+        env = _sanitized_env()
+        env["HOME"] = target
+        env["XDG_CONFIG_HOME"] = os.path.join(target, ".config")
+        env["XDG_DATA_HOME"] = os.path.join(target, ".local", "share")
+        result = subprocess.run(
+            [venv_python, "-c", _INSTALLED_FLEET_AND_MANIFEST_PROBE, target],
+            cwd=self._fresh_run_dir(), env=env, capture_output=True,
+            text=True, timeout=UV_TIMEOUT_SECONDS)
+        self.assertEqual(
+            result.returncode, 0,
+            f"the installed [fleet] and [manifest] stages must run against "
+            f"{target}; stderr:\n{result.stderr}")
+        landed = Path(target, "clients", "eda-crucible.py")
+        self.assertTrue(
+            landed.is_file(),
+            f"the installed package's [fleet] stage must lay "
+            f"`eda-crucible.py` down at {landed}; landed: "
+            f"{sorted(os.listdir(os.path.join(target, 'clients')))}")
+        source = REPO_ROOT / "clients" / "eda-crucible.py"
+        self.assertEqual(
+            source.read_bytes(), landed.read_bytes(),
+            f"the eda client laid down from the wheel must be byte-identical "
+            f"to {source}")
+        document = json.loads(
+            Path(target, "crucible-clients.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            str(landed), document.get("clients", {}).get("eda"),
+            f"`crucible-clients.json` must name the eda client under "
+            f"`clients.eda`; got clients={document.get('clients')!r}")
 
     # -- 3. NEGATIVE CONTROL ----------------------------------------------
 
