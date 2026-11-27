@@ -1,6 +1,6 @@
 # CR-CRU-243 — the fleet installs, declares and counts the eda client
 
-**Status:** PENDING · revised after gap analysis and user rulings (2026-11-27)
+**Status:** COMPLETED (shipped 2026-11-28 on develop)
 **Type:** feature
 **Priority:** high. Model B's writer reads the schema at run time.
 **Depends on:** CR-CRU-242
@@ -211,3 +211,37 @@ exclusions and about 35 named lists (5), and the docs (2).
 - A `tools` list.
 - Model B's writer and skill.
 - The DN's per-stack snapshot table and the PRD diagram.
+
+## Close-out (2026-11-28)
+
+Plan 282.
+
+- **Gap analysis:** the baseline was CR-CRU-242's gate on the same tree (13,980/0). A read-only fact pass found that
+  the spec's `stacks.eda` failed the existing schema tests and contradicted the client, and that §S4 named six
+  deleted files and missed about 14 lists. The user ruled:
+  - extend the schema vocabulary;
+  - census through the shared list, with recorded exclusions;
+  - AC1 through the existing install tests, and eda at 0644;
+  - the rest as recommended.
+
+  Points went from 8 to 13.
+- **Cycle 1050 (§S2, §S3):** the agreement harness learned the new forms and generates eda entries from the
+  schema; schema version 4 with `stacks.eda`; `eda-pytest` in the rust, arduino and maven skip sets.
+- **Cycle 1051 (§S1):** the installer lays `eda-crucible.py` down, the manifest names `clients.eda`, and the file
+  is 0644.
+- **Cycle 1052 (§S4, §S5):** 51 test files count eda or record why not (no lint, coverage or unit-check yet). The
+  census found two eda gaps, both fixed:
+  - eda's run verbs now word `--cycle` as filing (user ruling);
+  - a signal during an ingest now lets the run be filed.
+
+  The README, RUNBOOK, status contract and CHANGELOG name the client.
+- **Cycle 1053, VERIFY:** PASS, with no must-fix finding.
+- **Cycle 1054, FIX (user-chosen notes):**
+  - a test that `--cycle` files the run under its cycle;
+  - the gate's signal wording;
+  - the install comment;
+  - the schema says paths may also be absolute.
+- **Pre-merge gate (cycle 1054):** 14,295 passed and 0 failed in 26m16s. By suite: bun 5,181, python unit 2,995,
+  python integration 6,119.
+- **Noted for later:** a signal during the eda gate counts the suite as failed and goes on to the next one, rather
+  than stopping the gate.
