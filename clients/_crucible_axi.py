@@ -6747,11 +6747,15 @@ def tier_verb_help(tier, meaning, wired, declares=None):
 #   `runnable`  optional: `(args) -> tiers`, the tier verbs this client runs
 #               on this project, named by a declared cell's refusal. Unset,
 #               the refusal names the tiers the client wires.
+#   `labelled`  optional: True for a stack whose declared names take a label
+#               after the tier (`<tier>/<label>`), so the `<tier>` slot is
+#               read up to its first `/`. Unset (False), the whole slot is
+#               the name's tier, as every other stack reads it.
 DeclaredTierSurface = collections.namedtuple(
     "DeclaredTierSurface",
     ("target", "names", "read", "run", "add_args", "suites", "runs",
-     "runnable"),
-    defaults=((), None, None, None))
+     "runnable", "labelled"),
+    defaults=((), None, None, None, False))
 
 
 def declared_target_name(surface, tier):
@@ -7053,11 +7057,15 @@ def declared_target_tier(surface, target):
 
     It is not necessarily a TIER: `test:client` fits `test:<tier>` and names no
     tier of the vocabulary, which is why every caller checks the answer against
-    `TIER_MEANINGS` rather than assuming it."""
+    `TIER_MEANINGS` rather than assuming it.
+
+    A labelled surface's slot holds `<tier>/<label>`, and its tier is the
+    part before the first `/`."""
     head, _, tail = surface.target.partition("<tier>")
     if not target.startswith(head) or not target.endswith(tail):
         return None
-    return target[len(head):len(target) - len(tail) if tail else None]
+    slot = target[len(head):len(target) - len(tail) if tail else None]
+    return slot.partition("/")[0] if surface.labelled else slot
 
 
 def template_declared_suites(args, surface):

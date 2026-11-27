@@ -428,28 +428,27 @@ class _FallbackWatch:
     pytest can leave them uncounted: any report of a passing subtest, read
     through the whole output. What it saw rides every envelope the run
     produces as one `subtests-uncounted` warning. A unittest run counts every
-    subtest (its runner is Crucible's own), so it never warns."""
+    subtest (its runner is Crucible's own), so it never warns. A pytest run is
+    watched by the shared `PytestSubtestWatch`."""
 
     def __init__(self, narrator=None, runner=None):
         self._narrator = narrator
-        self._pytest = runner == _PYTEST
-        self._watching = True
+        self._pytest_watch = (_axi().PytestSubtestWatch(narrator)
+                              if runner == _PYTEST else None)
 
     def observe(self, line):
         """Feed one line of the runner's output."""
-        if (self._watching and self._pytest
-                and _axi().pytest_reports_passing_subtest(line)):
-            self._watching = False
-        if self._narrator is not None:
+        if self._pytest_watch is not None:
+            self._pytest_watch.observe(line)
+        elif self._narrator is not None:
             self._narrator.observe(line)
 
     def warnings(self):
         """`[{code: subtests-uncounted, detail}]` when passing subtests went
         uncounted, else `[]`."""
-        if not self._pytest or self._watching:
+        if self._pytest_watch is None:
             return []
-        return [{"code": "subtests-uncounted",
-                 "detail": _axi().PYTEST_SUBTESTS_UNCOUNTED_DETAIL}]
+        return self._pytest_watch.warnings()
 
 
 def _start_run(project_dir, agent_id, runner, tier=None, context=None, release=None):
@@ -684,6 +683,27 @@ def _no_report_warning(verb, runner, result):
                                     _no_report_artifact(runner),
                                     result.returncode, result.stdout or "",
                                     cause=cause)
+
+
+def _run_outcome(runner, returncode, reports_dir):
+    """What a finished run that wrote JUnit reports into `reports_dir` is
+    filed as, as one of the shared `PYTEST_OUTCOME_*` answers.
+
+    A pytest run's is the shared `pytest_run_outcome`. A unittest run has no
+    result when it left no JUnit report, ran nothing when its report holds no
+    test case and no hermetic leak is pending, and is filed otherwise."""
+    if runner == _PYTEST:
+        return _axi().pytest_run_outcome(returncode, reports_dir)
+    if not _axi().produced_junit(reports_dir):
+        return _axi().PYTEST_OUTCOME_NO_RESULT
+    # A run that caught a tripwire hit is filed whatever it ran.
+    if (not _axi().pending_hermetic_run_leaks()
+            and _axi().ran_nothing(
+                returncode,
+                _axi().junit_testcase_count(
+                    _axi().junit_report_paths(reports_dir)))):
+        return _axi().PYTEST_OUTCOME_RAN_NOTHING
+    return _axi().PYTEST_OUTCOME_FILE
 
 
 def _is_zero_discovery(result):
@@ -1008,17 +1028,12 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
 
-    # A pytest that failed as a runner wrote no result, whatever JUnit it left.
-    if (_axi().produced_junit(reports_dir)
-            and not (runner == _PYTEST
-                     and _axi().pytest_failed_as_runner(result.returncode))):
+    # The client decides one thing locally, from the runner's exit and the
+    # count of the report's test cases; everything else is the board's.
+    outcome = _run_outcome(runner, result.returncode, reports_dir)
+    if outcome != _axi().PYTEST_OUTCOME_NO_RESULT:
         report_paths = _axi().junit_report_paths(reports_dir)
-        # The client decides one thing locally, from the runner's exit and
-        # the count of the report's test cases; everything else is the board's.
-        # A run that caught a tripwire hit is filed whatever it ran.
-        if (not _axi().pending_hermetic_run_leaks()
-                and _axi().ran_nothing(result.returncode,
-                                       _axi().junit_testcase_count(report_paths))):
+        if outcome == _axi().PYTEST_OUTCOME_RAN_NOTHING:
             return _axi().emit_ran_nothing(
                 verb, _axi().JUNIT_REPORT_GLOB, result.returncode,
                 result.stdout or "", run_id, envelope_warnings, post_fn=_post,
@@ -1205,10 +1220,10 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
           file=sys.stderr)
     envelope_warnings = preflight_warnings + watch.warnings()
 
-    # A pytest that failed as a runner wrote no result, whatever JUnit it left.
-    if ((runner == _PYTEST
-            and _axi().pytest_failed_as_runner(result.returncode))
-            or not _axi().produced_junit(reports_dir)):
+    # The client decides one thing locally, from the runner's exit and the
+    # count of the report's test cases; everything else is the board's.
+    outcome = _run_outcome(runner, result.returncode, reports_dir)
+    if outcome == _axi().PYTEST_OUTCOME_NO_RESULT:
         # A hermetic run that caught a tripwire hit is filed with its leaks.
         if _axi().pending_hermetic_run_leaks():
             _axi().close_narration(narrator)
@@ -1260,12 +1275,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         return result.returncode or 1
 
     report_paths = _axi().junit_report_paths(reports_dir)
-    # The client decides one thing locally, from the runner's exit and the
-    # count of the report's test cases; everything else is the board's.
-    # A run that caught a tripwire hit is filed whatever it ran.
-    if (not _axi().pending_hermetic_run_leaks()
-            and _axi().ran_nothing(result.returncode,
-                                   _axi().junit_testcase_count(report_paths))):
+    if outcome == _axi().PYTEST_OUTCOME_RAN_NOTHING:
         return _axi().emit_ran_nothing(
             verb, _axi().JUNIT_REPORT_GLOB, result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,
