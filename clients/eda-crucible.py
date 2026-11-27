@@ -696,7 +696,9 @@ def _run_pytest(verb, setting, key, selection, tier):
     """One pytest run over `selection`, opened under `tier` before pytest is
     spawned and filed by how pytest exited (`pytest_run_outcome`): its JUnit
     filed, a run that ran nothing aborted, a runner failure or a run with no
-    JUnit filed as a compile record. A signal while it runs aborts it.
+    JUnit filed as a compile record. A signal while it runs aborts it; a
+    signal while it is being filed is held until the filing is done, so the
+    run is filed, not aborted, and the signal is then reported with it.
     Returns its `_PytestRun`, named `key`."""
     reports_dir = setting.reports_dir
     _axi().wipe_junit_reports(reports_dir)
@@ -714,15 +716,24 @@ def _run_pytest(verb, setting, key, selection, tier):
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     # The timing brackets the one pytest child alone, so a `unit` run that
     # spent its wall clock waiting is told so; every other tier is not.
+    filed = None
     try:
-        with (_axi().abandon_trap(run_id),
-              _axi().hermetic_wrap(cmd, setting.env, enabled=setting.hermetic,
-                                   project_dir=setting.project_dir) as wrapped,
-              _axi().ChildRunTiming() as timing):
-            result = _axi().run_streamed(wrapped.cmd, setting.project_dir,
-                                         wrapped.env, setting.log, watch,
-                                         capture=True)
+        with _axi().abandon_trap(run_id) as trap:
+            with (_axi().hermetic_wrap(cmd, setting.env,
+                                       enabled=setting.hermetic,
+                                       project_dir=setting.project_dir)
+                  as wrapped,
+                  _axi().ChildRunTiming() as timing):
+                result = _axi().run_streamed(wrapped.cmd, setting.project_dir,
+                                             wrapped.env, setting.log, watch,
+                                             capture=True)
+            with trap.held():
+                filed = _file_pytest_run(verb, setting, key, tier, run_id,
+                                         result, narrator, watch, timing,
+                                         warnings)
     except _axi().RunAbandoned as abandoned:
+        if filed is not None:
+            return filed._replace(signum=abandoned.signum, run_id=run_id)
         signame = _signal_name(abandoned.signum)
         closing = ([_axi().abort_run(_post, setting.project_key, setting.agent,
                                      run_id,
@@ -732,6 +743,14 @@ def _run_pytest(verb, setting, key, selection, tier):
         return _PytestRun(key, VERDICT_FAIL, None, None,
                           warnings + watch.warnings() + closing, [], False,
                           signum=abandoned.signum, run_id=run_id)
+    return filed
+
+
+def _file_pytest_run(verb, setting, key, tier, run_id, result, narrator,
+                     watch, timing, warnings):
+    """File the finished pytest `result` of run `run_id` by how pytest
+    exited (`pytest_run_outcome`). Returns its `_PytestRun`, named `key`."""
+    reports_dir = setting.reports_dir
     print(f"[crucible] pytest exit={result.returncode}", file=sys.stderr)
     _axi().close_narration(narrator)
     warnings += watch.warnings()
@@ -821,6 +840,14 @@ def _run_warnings(preflight, runs):
     return warnings
 
 
+def _runs_help(verb, signalled):
+    """The next steps after a run verb: the verb's own, unless a signal
+    ended a run that was not filed, which is then left to settle."""
+    if signalled is not None and not signalled.filed:
+        return _axi().run_left_open_help()
+    return _axi().HELP_STEPS.get(verb, ["status"])
+
+
 def _emit_runs(verb, setting, preflight, runs, *, keyed):
     """The ONE envelope of a run verb over its pytest `runs`: the summed
     `run` block, its `verdict`, `entries[]` (when `keyed`: one per entry
@@ -831,8 +858,7 @@ def _emit_runs(verb, setting, preflight, runs, *, keyed):
     signalled = next((run for run in runs if run.signum is not None), None)
     skipped = [item for run in runs for item in run.skipped]
     fields = {"run": _summed_figures(runs),
-              "help": (_axi().run_left_open_help() if signalled is not None
-                       else _axi().HELP_STEPS.get(verb, ["status"])),
+              "help": _runs_help(verb, signalled),
               "verdict": verdict}
     if keyed:
         fields["entries"] = [
@@ -1283,10 +1309,11 @@ _CLI_DESCRIPTION = (
 )
 
 
-def _add_gate_cycle_arg(p):
-    """Bind `--cycle` on a gated verb (delegates to the shared binding so the
-    fleet documents it identically)."""
-    return _axi().add_gate_cycle_arg(p)
+def _add_filing_cycle_arg(p):
+    """Bind `--cycle` on a run verb: the cycle its run is filed under. An eda
+    run opens no gated identity, so the verb takes the shared filing binding
+    and the fleet documents it identically."""
+    return _axi().add_filing_cycle_arg(p)
 
 
 def _add_run_args(p):
@@ -1312,7 +1339,7 @@ def _add_declared_tier_args(p):
     """The flags a declared tier verb takes."""
     _add_run_args(p)
     _add_python_arg(p)
-    _add_gate_cycle_arg(p)
+    _add_filing_cycle_arg(p)
     _axi().add_run_release_arg(p)
     p.add_argument("--entry",
                    help="Run only this eda entry of the tier, by its key "
@@ -1365,7 +1392,7 @@ def _add_lifecycle_verbs(sub):
                    help="The paths or pytest node ids to run, relative to the "
                         "project dir. Required: without it the run is refused.")
     _add_python_arg(t)
-    _add_gate_cycle_arg(t)
+    _add_filing_cycle_arg(t)
     _axi().add_run_release_arg(t)
     _add_project_dir_arg(t)
     _axi().add_hermetic_arg(t)
@@ -1378,7 +1405,7 @@ def _add_lifecycle_verbs(sub):
                    help="Agent id to ingest under — REQUIRED; it must already be "
                         "registered.")
     a.add_argument("--reports", help=_axi().REPORTS_HELP)
-    _axi().add_filing_cycle_arg(a)
+    _add_filing_cycle_arg(a)
     _add_project_dir_arg(a)
     a.set_defaults(func=cmd_auto_ingest)
 
@@ -1409,7 +1436,7 @@ def _add_tier_verbs(sub):
             cmd_regression,
             "Every eda entry's paths (e2e included) as one pytest run filed "
             "under regression; refused when the project declares no eda entry.",
-            (_add_run_args, _add_python_arg, _add_gate_cycle_arg,
+            (_add_run_args, _add_python_arg, _add_filing_cycle_arg,
              _axi().add_run_release_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
@@ -1424,7 +1451,7 @@ def _add_gate_verbs(sub):
                              "outcome posted as the pre-merge-gate milestone."))
     _add_run_args(g)
     _add_python_arg(g)
-    _add_gate_cycle_arg(g)
+    _add_filing_cycle_arg(g)
     _axi().add_run_release_arg(g)
     _axi().add_gate_suites_arg(g)
     _add_project_dir_arg(g)
