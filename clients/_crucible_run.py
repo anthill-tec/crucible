@@ -455,6 +455,11 @@ def run_may_be_filed_warning(run_id, error):
     }
 
 
+#: The reason a run a signal interrupted is aborted with, its `{signame}`
+#: the signal's name (`SIGTERM`).
+SIGNAL_ABORT_REASON = "{signame} interrupted the wrapped run"
+
+
 def run_abort_path(run_id):
     """`RUN_ABORT_PATH` for ONE run."""
     return RUN_ABORT_PATH.format(run_id=urllib.parse.quote(str(run_id), safe=""))
@@ -1283,7 +1288,7 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
     if run_id is not None:
         signame = signal.Signals(abandoned.signum).name
         closing = abort_run(post_fn, project_key, agent_id, run_id,
-                            f"{signame} interrupted the wrapped run")
+                            SIGNAL_ABORT_REASON.format(signame=signame))
     return _emit_abandoned(verb, _core.axi_context(project_key, agent_id=agent_id),
                            run_id, abandoned.signum, warnings, closing)
 

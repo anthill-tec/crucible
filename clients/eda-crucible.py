@@ -141,10 +141,12 @@ VERDICT_GREEN = "pass"
 _TIER_SKIPPED_CODE = "tier-skipped"
 
 # pytest's `-v` line for one skipped test: `<node id> SKIPPED (<reason>)`,
-# then the progress marker. The reason is everything up to the line's last
-# closing parenthesis before that marker.
+# then the progress marker. The node id is read as the shared verdict line
+# reads it (a path, `::`, then anything, spaces included) and ends at its
+# first ` SKIPPED` the rest of the line fits; the reason is everything up to
+# the line's last closing parenthesis before the marker.
 _PYTEST_SKIPPED_LINE = re.compile(
-    r"^(?P<test>\S+::\S+) SKIPPED(?: \((?P<reason>.*)\))?"
+    r"^(?P<test>\S+::\S.*?) SKIPPED(?: \((?P<reason>.*)\))?"
     r"(?:\s+\[\s*\d+%\])?\s*$")
 
 
@@ -451,18 +453,25 @@ class _NoEdaEntry(_axi().TierRunUndeclared):
     eda entry (`regression`, the gate) on a project that declares none:
     raised before anything is spawned or posted, so `run_verb` writes the
     refusal and a gate that ran nothing records nothing. Its words name the
-    declaration file and where an eda entry goes."""
+    declaration file and where an eda entry goes.
+
+    The shared constructor builds words of its own and takes none, so it is
+    not run: these words are built once, the exception is initialised with
+    its detail, and it carries every field the shared refusal carries."""
 
     def __init__(self, verb, declaration):
-        super().__init__(verb, (), _TIER_DECLARATION_SURFACE.names)
-        self.detail = (f"{declaration.path} declares no eda entry, so "
-                       f"{verb} has nothing to run; nothing was run")
+        detail = (f"{declaration.path} declares no eda entry, so "
+                  f"{verb} has nothing to run; nothing was run")
+        Exception.__init__(self, detail)
+        self.tier = verb
+        self.declared = []
+        self.surface = _TIER_DECLARATION_SURFACE.names
+        self.detail = detail
         self.help = [
             (f'declare one: [targets."<tier>"] (or [targets."<tier>/<label>"]) '
              f'with framework = "{EDA_FRAMEWORK}" and paths = ["<path>", …], '
              f"in {declaration.path}"),
             "status"]
-        self.args = (self.detail,)
 
 
 # ── the interpreter: the project's, never this client's own ────────────────
@@ -637,14 +646,14 @@ def _figures(resp):
 
 def _filed_verdict(resp):
     """The verdict of a run the board answered the filing of: `fail` when it
-    did not file it or filed a failure, `skip` when it filed only skipped
-    tests, else `pass`."""
+    did not file it, filed it without its passed and failed counts, or filed
+    a failure; `skip` when it filed only skipped tests; else `pass`."""
     if not (resp or {}).get("ok"):
         return VERDICT_FAIL
     figures = _figures(resp)
     passed, failed, pending = (figures["passed"], figures["failed"],
                                figures["pending"])
-    if isinstance(failed, int) and failed > 0:
+    if passed is None or failed is None or failed > 0:
         return VERDICT_FAIL
     if passed == 0 and failed == 0 and isinstance(pending, int) and pending > 0:
         return VERDICT_SKIP
@@ -717,7 +726,8 @@ def _run_pytest(verb, setting, key, selection, tier):
         signame = _signal_name(abandoned.signum)
         closing = ([_axi().abort_run(_post, setting.project_key, setting.agent,
                                      run_id,
-                                     f"{signame} interrupted the wrapped run")]
+                                     _axi().SIGNAL_ABORT_REASON.format(
+                                         signame=signame))]
                    if run_id is not None else [])
         return _PytestRun(key, VERDICT_FAIL, None, None,
                           warnings + watch.warnings() + closing, [], False,
