@@ -227,7 +227,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-212](CR-CRU-212-every-clients-regression-runs-the-whole-suite-without-coverage-unless-asked.md) | every client's regression runs the whole suite without coverage unless asked | feature | COMPLETED | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | COMPLETED | 152, 207, 208 | 8 (0.4.0) |
 | [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | COMPLETED | 204, 208 | 8 (0.4.0) |
-| [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | PENDING | — | 9 (0.5.0) |
+| [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | COMPLETED | — | 9 (0.5.0) |
 
 ## Deferred — post-0.2.0
 

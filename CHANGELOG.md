@@ -53,6 +53,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Changed
 
+- **A run repeated back-to-back on the active cycle folds into one chip.** In the Workflow tab's Now pane,
+  the active cycle's line folds consecutive settled runs by one agent with equal passed, failed and total figures
+  into one chip, `<agent> <passed>/<total> ×<n> <time>`, so a re-run no longer reads as a duplicate. The chip is
+  the latest run: its id, colour and click, with `<time>` its clock time (dated when it is from another UTC day).
+  Back-to-back aborted runs by one agent fold the same way (`aborted ×<n> <time>`), and an aborted run never
+  folds with a finished one. A run that differs breaks the fold, running entries never fold, and a run that
+  repeats nothing is drawn as before. The earlier runs stay reachable through the cycle's `→ Runs` badge.
+
 - **A multi-track project's waves always show their track.** A project whose queue declares more than one
   track, in any release, status or lifecycle, now lanes every wave on the roadmap by its own CRs' tracks. A
   wave on one track draws that one lane, and its header reads `· 1 track`. A CR that declares no track in such a
