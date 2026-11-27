@@ -118,7 +118,7 @@ The gap analysis re-scored the original CR at 16–17 points, so it was split at
 
 ## Estimated size
 
-6 points: the package and its lifecycle (3), the wheel build, the manifest key, the sdist/wheel content and the
+5 points: the package and its lifecycle (2), the wheel build, the manifest key, the sdist/wheel content and the
 install (3).
 
 ## Risk

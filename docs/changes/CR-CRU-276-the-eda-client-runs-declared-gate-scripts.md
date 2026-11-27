@@ -107,8 +107,8 @@ events) and the `tier-skipped` warning as CR-CRU-242 §S5 defines them; the wall
 
 ## Estimated size
 
-10 points: the schema v5 vocabulary with the agreement harness and the skip sets (3), the script run, the version
-check and the outcomes (4), tiers, `regression` and the gate (2), docs (1).
+8 points: the schema v5 vocabulary with the agreement harness and the skip sets (3), the script run, the version
+check and the outcomes (3), tiers, `regression` and the gate (1), docs (1).
 
 ## Risk
 
