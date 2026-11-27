@@ -13,7 +13,9 @@
 // public/app-logic.mjs) through the `window.CrucibleLogic` bridge, so it is
 // pinned here through the real SPA mounted under happy-dom with a stubbed
 // fetch — the mount pattern tests/integration/active-cycle-line-counts-only-test-runs.test.ts
-// uses. The wall clock is pinned with bun's `setSystemTime` and reset after
+// uses; a mount that asks for it gets the shared fake stream
+// (tests/helpers/stream-workspace-harness.ts), so a new run arrives the way the
+// page really learns of one — an `events` frame, then a re-read. The wall clock is pinned with bun's `setSystemTime` and reset after
 // every test. Expected clock strings are written out literally from the
 // fixtures' `Date.UTC(...)` timestamps, never derived from the formatter.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
@@ -23,6 +25,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
+import {
+  FakeEventSource,
+  installEventSource,
+  restoreEventSource,
+} from "../helpers/stream-workspace-harness";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const VAN_SRC = readFileSync(
@@ -94,20 +101,42 @@ interface ProjectFixture {
 
 interface MountOpts {
   key: string;
+  /** The events read answers with THIS array, read afresh on every request,
+   *  so a run pushed onto it is served by the next events read. */
   events: BriefFixture[];
   openRuns?: OpenRunFixture[];
   plans: PlanFixture[];
+  /** Install a scriptable stream (happy-dom has no EventSource) before the
+   *  app boots, so a test can send the frame that announces a new run. */
+  stream?: boolean;
+  /** Force the `--band` token the app reads its layout band from (no
+   *  stylesheet loads here, so it otherwise reads as the desktop band). */
+  band?: "phone";
 }
 
 let cacheBust = 0;
 /** Every run id whose detail the app read during the current test. */
 let detailReads: string[] = [];
+/** The mounted page's live stream, when the mount installed one. */
+let liveStream: FakeEventSource | null = null;
 
 async function mountApp(opts: MountOpts): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost/p/${opts.key}` });
   document.body.innerHTML = '<div id="app"></div>';
+  if (opts.band !== undefined) document.documentElement.style.setProperty("--band", opts.band);
   detailReads = [];
+  liveStream = null;
+  if (opts.stream === true) {
+    installEventSource(
+      class extends FakeEventSource {
+        constructor(url: string) {
+          super(url);
+          liveStream = this;
+        }
+      },
+    );
+  }
   const projects: ProjectFixture[] = [
     {
       key: opts.key,
@@ -179,8 +208,18 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  restoreEventSource();
+  liveStream = null;
   setSystemTime();
 });
+
+/** The board announces a change to the events: the mounted page's stream
+ *  delivers an `events` frame, and the page re-reads what it names. */
+async function announceEvents(key: string): Promise<void> {
+  expect(liveStream).not.toBeNull();
+  liveStream!.dispatch("events", key);
+  await settleDom({ ticks: 8 });
+}
 
 const norm = (s: string | null): string => (s ?? "").replace(/\s+/g, " ").trim();
 
@@ -483,5 +522,85 @@ describe("the active cycle's line leaves runs that repeat nothing as they are", 
     expect(norm(line.textContent)).toBe(
       "fold-mixer 0/0 · fold-mixer aborted · awaiting orchestrator confirm",
     );
+  });
+});
+
+describe("the active cycle's line re-folds as new runs arrive on the live stream", () => {
+  test("a third equal run announced on the stream turns the mounted '×2' chip into '×3' carrying the new run's id, and a differing run then adds a second, uncounted chip after it", async () => {
+    setSystemTime(PINNED_NOW);
+    const key = "fold-live";
+    const cycleId = 9210;
+    const events = [
+      run({ id: "evt-fold-l1", projectKey: key, agentId: "fold-live-agent", timestamp: Date.UTC(2026, 10, 27, 14, 5, 0), context: { cycleId } }),
+      run({ id: "evt-fold-l2", projectKey: key, agentId: "fold-live-agent", timestamp: Date.UTC(2026, 10, 27, 14, 20, 0), context: { cycleId } }),
+    ];
+    await mountApp({ key, events, plans: [activePlan(key, 930, cycleId)], stream: true });
+    await clickTab("Workflow");
+    liveStream!.open();
+    await settleDom({ ticks: 8 });
+
+    const before = activeLine(cycleId);
+    expect(chipIds(before)).toEqual(["evt-fold-l2"]);
+    expect(norm(chips(before)[0]!.textContent)).toBe("fold-live-agent 14/14 ×2 14:20");
+    expect(chips(before)[0]!.getAttribute("data-run-count")).toBe("2");
+
+    // A third equal run lands on the board and the stream announces it.
+    events.push(
+      run({ id: "evt-fold-l3", projectKey: key, agentId: "fold-live-agent", timestamp: Date.UTC(2026, 10, 27, 14, 47, 0), context: { cycleId } }),
+    );
+    await announceEvents(key);
+
+    const refolded = activeLine(cycleId);
+    expect(chipIds(refolded)).toEqual(["evt-fold-l3"]);
+    const chip = chips(refolded)[0]!;
+    expect(norm(chip.textContent)).toBe("fold-live-agent 14/14 ×3 14:47");
+    expect(chip.getAttribute("data-run-count")).toBe("3");
+    expect(chip.getAttribute("data-run-id")).toBe("evt-fold-l3");
+
+    // A run that differs lands next: it starts its own chip, after the fold.
+    events.push(
+      run({ id: "evt-fold-l4", projectKey: key, agentId: "fold-live-agent", passed: 13, failed: 1, timestamp: Date.UTC(2026, 10, 27, 15, 2, 0), context: { cycleId } }),
+    );
+    await announceEvents(key);
+
+    const line = activeLine(cycleId);
+    expect(chipIds(line)).toEqual(["evt-fold-l3", "evt-fold-l4"]);
+    const [folded, differing] = chips(line) as [HTMLElement, HTMLElement];
+    expect(norm(folded.textContent)).toBe("fold-live-agent 14/14 ×3 14:47");
+    expect(folded.getAttribute("data-run-count")).toBe("3");
+    expect(norm(differing.textContent)).toBe("fold-live-agent 13/14");
+    expect(differing.hasAttribute("data-run-count")).toBe(false);
+    expect(differing.textContent ?? "").not.toContain("×");
+    expect(folded.compareDocumentPosition(differing) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(norm(line.textContent)).not.toContain("ago");
+  });
+});
+
+describe("the active cycle's line folds repeated runs on the phone layout too", () => {
+  test("on the phone layout three equal runs by one agent render one '×3' chip with a run count of 3", async () => {
+    setSystemTime(PINNED_NOW);
+    const key = "fold-phone";
+    const cycleId = 9211;
+    const events = [
+      run({ id: "evt-fold-p1", projectKey: key, agentId: "fold-phone-agent", timestamp: Date.UTC(2026, 10, 27, 14, 5, 0), context: { cycleId } }),
+      run({ id: "evt-fold-p2", projectKey: key, agentId: "fold-phone-agent", timestamp: Date.UTC(2026, 10, 27, 14, 20, 0), context: { cycleId } }),
+      run({ id: "evt-fold-p3", projectKey: key, agentId: "fold-phone-agent", timestamp: Date.UTC(2026, 10, 27, 14, 47, 0), context: { cycleId } }),
+    ];
+    await mountApp({ key, events, plans: [activePlan(key, 931, cycleId)], band: "phone" });
+    await clickTab("Workflow");
+
+    // The phone layout is the one mounted: its Now/History sub-tabs render,
+    // and the desktop split card does not.
+    expect(document.querySelectorAll('[data-testid="workflow-subtab"]').length).toBe(2);
+    expect(document.querySelector('[data-testid="workflow-panes-card"]')).toBeNull();
+
+    const line = activeLine(cycleId);
+    expect(chipIds(line)).toEqual(["evt-fold-p3"]);
+    const chip = chips(line)[0]!;
+    expect(norm(chip.textContent)).toBe("fold-phone-agent 14/14 ×3 14:47");
+    expect(chip.getAttribute("data-run-count")).toBe("3");
+    expect(norm(line.textContent)).not.toContain("ago");
   });
 });

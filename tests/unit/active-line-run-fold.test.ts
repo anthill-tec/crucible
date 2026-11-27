@@ -23,7 +23,8 @@ interface RunEvent {
   passed: number;
   failed: number;
   total: number;
-  timestamp: string;
+  /** Epoch milliseconds, as the board's events carry it. */
+  timestamp: number;
   status?: "aborted";
 }
 
@@ -37,7 +38,7 @@ function finished(agentId: string, passed: number, failed: number, total: number
     passed,
     failed,
     total,
-    timestamp: new Date(Date.UTC(2026, 9, 28, 10, 0, id)).toISOString(),
+    timestamp: Date.UTC(2026, 9, 28, 10, 0, id),
   };
 }
 
