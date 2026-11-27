@@ -243,7 +243,11 @@ class ACollectionErrorIsFiledAsAFailedTestTest(_OneCopyPerExit):
                 ingests = run.posted(RUN_INGEST)
                 self.assertEqual(len(ingests), 1, f"one filing; {run.diag()}")
                 cases = sent_cases(ingests[0].get("body"))
-                broken = [c for c in cases if "check_broken_import" in str(c[0])]
+                # pytest's xunit1 report gives a module-level collection error
+                # an empty classname, so its group is `pytest`: the broken
+                # module's case is found by its name or its file instead.
+                broken = [c for c in cases
+                          if "check_broken_import" in f"{c[1] or ''} {c[3] or ''}"]
                 self.assertEqual([status for _g, _n, status, _f in broken], ["fail"],
                                  f"the collection error is one failed test; {cases!r}")
                 self.assertEqual(run.posted(RUN_COMPILE), [],
@@ -280,8 +284,11 @@ class _ARunnerFailure(_OneCopyPerExit):
 
 
 class AMissingNodeIdIsARunnerFailureTest(_ARunnerFailure):
-    """A `module` entry naming a gate its file does not hold: pytest exits 4
-    with `ERROR: not found:`; regression passes the same node id."""
+    """A copy whose ONLY entry is a `module` entry naming a gate its file does
+    not hold: pytest exits 4 with `ERROR: not found:`; regression passes the
+    same node id alone. No other entry may cover the node id: pytest drops a
+    node id a directory argument also covers, and would then run that
+    directory instead of failing as a runner."""
 
     TIER_VERB = "module"
     TIER_KEY = "module"
@@ -290,6 +297,7 @@ class AMissingNodeIdIsARunnerFailureTest(_ARunnerFailure):
 
     @classmethod
     def prepare(cls):
+        cls.project.declare_only_the_board()
         cls.project.declare(MISSING_NODE_ENTRY)
 
 
